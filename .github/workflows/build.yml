@@ -58,12 +58,18 @@ jobs:
           fi
           echo "SUCCESS: UBI = 0x1EA00000 (490MB)"
 
-      - name: Setup feeds
+      - name: Setup feeds (helloworld feed, easy to update later)
         working-directory: openwrt
         run: |
-          echo "src-git helloworld https://github.com/fw876/helloworld.git" >> feeds.conf.default
+          # feed 方式引入 fw876/helloworld
+          # 以后重新编译时，feeds update 会自动拉最新 SSR Plus+
+          sed -i '/helloworld/d' feeds.conf.default
+          echo "src-git helloworld https://github.com/fw876/helloworld.git;master" >> feeds.conf.default
           ./scripts/feeds update -a
           ./scripts/feeds install -a
+          echo "=== helloworld packages ==="
+          ls feeds/helloworld/ | head -30 || true
+          test -d feeds/helloworld/luci-app-ssr-plus && echo "SSR Plus+ feed OK" || echo "WARNING: luci-app-ssr-plus missing"
 
       - name: Add argon theme
         working-directory: openwrt
@@ -212,9 +218,25 @@ jobs:
           sed -i 's/^[[:space:]]*//' files/etc/uci-defaults/99-custom-init.sh
           chmod +x files/etc/uci-defaults/99-custom-init.sh
 
-      - name: Download packages
+      - name: Download packages (with retry)
         working-directory: openwrt
-        run: make download -j$(nproc) V=s 2>&1 | grep -E "ERROR|error" || true
+        run: |
+          set +e
+          for i in 1 2 3; do
+            echo "=== Download attempt $i/3 ==="
+            make download -j$(nproc) V=s 2>&1 | tee /tmp/dl-$i.log
+            fails=$(grep -cE "returned error: 404|Download failed|ERROR:.*download" /tmp/dl-$i.log || true)
+            echo "Failed count this round: $fails"
+            if [ "$fails" = "0" ]; then
+              echo "Download completed successfully"
+              exit 0
+            fi
+            echo "Retrying in 20s..."
+            sleep 20
+          done
+          echo "=== Remaining download failures (may be non-critical) ==="
+          grep -E "returned error: 404|Download failed" /tmp/dl-*.log | sort -u | head -30 || true
+          exit 0
 
       - name: Build firmware
         working-directory: openwrt
@@ -243,9 +265,10 @@ jobs:
           name: OpenWrt 25.12.5 Cudy TR3000 - SSR Plus+ Xray 490MB UBI
           body: |
             OpenWrt 25.12.5 + SSR Plus+ (Xray only) + 强制 490MB UBI
-            - 主用 SSR Plus+，仅 Xray
+            - 主用 SSR Plus+（fw876/helloworld feed，后续 feeds update 可更新）
+            - 仅 Xray 内核
             - 已删除 PassWall / Nikki / MosDNS
-            - DTS 强制 UBI 0x1EA00000 (490MB)，失败则编译中断
+            - DTS 强制 UBI 0x1EA00000 (490MB)
             - 默认屏蔽 IPv6
             - 4G 驱动 + Argon
           files: |
