@@ -12,7 +12,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-22.04
-    timeout-minutes: 240
+    timeout-minutes: 300
 
     steps:
       - name: Free disk space
@@ -30,45 +30,53 @@ jobs:
         run: |
           git clone --depth=1 --branch v25.12.5 https://github.com/openwrt/openwrt.git openwrt
 
-      - name: Force patch UBI to 490MB
+      - name: Force patch UBI 490MB + IMAGE_SIZE
         working-directory: openwrt
         run: |
           set -e
+
+          # 1) DTS: UBI 64MB -> 490MB
           DTS_FILE=$(find target/linux/mediatek/dts -name "mt7981b-cudy-tr3000-v1.dts" | head -1)
           echo "DTS_FILE=$DTS_FILE"
-          if [ -z "$DTS_FILE" ]; then
-            echo "ERROR: DTS not found"
-            find target/linux/mediatek/dts -name "*cudy*" -o -name "*tr3000*" || true
-            exit 1
-          fi
-          echo "=== BEFORE ==="
+          test -n "$DTS_FILE" || { echo "ERROR: DTS not found"; exit 1; }
+          echo "=== DTS BEFORE ==="
           grep -A3 -E "&ubi|reg =" "$DTS_FILE" || true
           sed -i 's/reg = <0x5c0000 0x4000000>/reg = <0x5c0000 0x1EA00000>/g' "$DTS_FILE"
           sed -i 's/0x4000000/0x1EA00000/g' "$DTS_FILE"
-          echo "=== AFTER ==="
+          echo "=== DTS AFTER ==="
           grep -n "0x1EA00000\|0x4000000\|ubi\|reg =" "$DTS_FILE" || true
-          if ! grep -q "0x1EA00000" "$DTS_FILE"; then
-            echo "ERROR: 0x1EA00000 not found after patch"
-            cat "$DTS_FILE"
-            exit 1
-          fi
-          if grep -q "0x4000000" "$DTS_FILE"; then
-            echo "ERROR: still has 0x4000000"
-            exit 1
-          fi
-          echo "SUCCESS: UBI = 0x1EA00000 (490MB)"
+          grep -q "0x1EA00000" "$DTS_FILE" || { echo "ERROR: DTS patch failed"; exit 1; }
+          ! grep -q "0x4000000" "$DTS_FILE" || { echo "ERROR: DTS still has 0x4000000"; exit 1; }
+          echo "SUCCESS: DTS UBI = 0x1EA00000 (490MB)"
 
-      - name: Setup feeds (helloworld feed, easy to update later)
+          # 2) filogic.mk: IMAGE_SIZE 65536k -> 502784k (约 490MB)
+          # 官方默认 64MB，装 SSR Plus+ 会超限导致无镜像
+          MK_FILE="target/linux/mediatek/image/filogic.mk"
+          test -f "$MK_FILE" || { echo "ERROR: filogic.mk not found"; exit 1; }
+          echo "=== filogic.mk cudy_tr3000-v1 section BEFORE ==="
+          grep -A20 "Device/cudy_tr3000-v1$" "$MK_FILE" | head -25 || true
+          # 只改 cudy_tr3000-v1 设备块里的 IMAGE_SIZE（用 awk 更安全）
+          awk '
+            /^define Device\/cudy_tr3000-v1$/ { in_dev=1 }
+            in_dev && /^endef$/ { in_dev=0 }
+            in_dev && /IMAGE_SIZE := 65536k/ { sub(/65536k/, "502784k") }
+            { print }
+          ' "$MK_FILE" > "$MK_FILE.tmp" && mv "$MK_FILE.tmp" "$MK_FILE"
+          echo "=== filogic.mk AFTER ==="
+          grep -A20 "Device/cudy_tr3000-v1$" "$MK_FILE" | head -25 || true
+          grep -A15 "Device/cudy_tr3000-v1$" "$MK_FILE" | grep -q "502784k" || {
+            echo "ERROR: IMAGE_SIZE patch failed"
+            exit 1
+          }
+          echo "SUCCESS: IMAGE_SIZE = 502784k (~490MB)"
+
+      - name: Setup feeds (helloworld)
         working-directory: openwrt
         run: |
-          # feed 方式引入 fw876/helloworld
-          # 以后重新编译时，feeds update 会自动拉最新 SSR Plus+
           sed -i '/helloworld/d' feeds.conf.default
           echo "src-git helloworld https://github.com/fw876/helloworld.git;master" >> feeds.conf.default
           ./scripts/feeds update -a
           ./scripts/feeds install -a
-          echo "=== helloworld packages ==="
-          ls feeds/helloworld/ | head -30 || true
           test -d feeds/helloworld/luci-app-ssr-plus && echo "SSR Plus+ feed OK" || echo "WARNING: luci-app-ssr-plus missing"
 
       - name: Add argon theme
@@ -218,44 +226,56 @@ jobs:
           sed -i 's/^[[:space:]]*//' files/etc/uci-defaults/99-custom-init.sh
           chmod +x files/etc/uci-defaults/99-custom-init.sh
 
-      - name: Download packages (with retry)
+      - name: Download packages
         working-directory: openwrt
         run: |
           set +e
           for i in 1 2 3; do
             echo "=== Download attempt $i/3 ==="
             make download -j$(nproc) V=s 2>&1 | tee /tmp/dl-$i.log
-            fails=$(grep -cE "returned error: 404|Download failed|ERROR:.*download" /tmp/dl-$i.log || true)
-            echo "Failed count this round: $fails"
-            if [ "$fails" = "0" ]; then
-              echo "Download completed successfully"
-              exit 0
-            fi
-            echo "Retrying in 20s..."
+            fails=$(grep -cE "returned error: 404|Download failed" /tmp/dl-$i.log || true)
+            echo "Failed count: $fails"
+            [ "$fails" = "0" ] && exit 0
             sleep 20
           done
-          echo "=== Remaining download failures (may be non-critical) ==="
           grep -E "returned error: 404|Download failed" /tmp/dl-*.log | sort -u | head -30 || true
           exit 0
 
       - name: Build firmware
         working-directory: openwrt
-        run: make -j$(nproc) V=s 2>&1 | tee build.log | grep -E "^(make\[|ERROR|WARNING|Compiling|Building)" || true
+        run: |
+          set -o pipefail
+          make -j$(nproc) V=s 2>&1 | tee build.log
+          # 上面失败会直接让 step 失败（不再 || true）
 
-      - name: Check output
+      - name: Check and collect firmware
         working-directory: openwrt
         run: |
-          ls -lh bin/targets/mediatek/filogic/ | grep -iE "cudy|tr3000" || ls -lh bin/targets/mediatek/filogic/ || true
-          find bin/packages -name "*ssr-plus*" -o -name "*xray*" 2>/dev/null | head -15 || true
+          set -e
+          echo "=== All files in filogic ==="
+          ls -lah bin/targets/mediatek/filogic/ || true
+          echo "=== Looking for firmware ==="
+          find bin/targets/mediatek/filogic -type f \( -name "*cudy*" -o -name "*tr3000*" \) -ls || true
+          # 必须至少有一个 sysupgrade 相关文件
+          count=$(find bin/targets/mediatek/filogic -type f \( -name "*sysupgrade*" -o -name "*cudy*tr3000*" \) | wc -l)
+          echo "Firmware file count: $count"
+          if [ "$count" -eq 0 ]; then
+            echo "ERROR: No firmware produced!"
+            echo "=== Last 80 lines of build.log ==="
+            tail -80 build.log || true
+            exit 1
+          fi
+          mkdir -p /tmp/fw
+          cp -v bin/targets/mediatek/filogic/*cudy* /tmp/fw/ 2>/dev/null || true
+          cp -v bin/targets/mediatek/filogic/*tr3000* /tmp/fw/ 2>/dev/null || true
+          ls -lah /tmp/fw/
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: openwrt-25.12.5-cudy-tr3000-ssrplus-xray-490MB
-          path: |
-            openwrt/bin/targets/mediatek/filogic/*cudy*
-            openwrt/bin/targets/mediatek/filogic/*tr3000*
-          if-no-files-found: warn
+          path: /tmp/fw/
+          if-no-files-found: error
           retention-days: 14
 
       - name: Create Release
@@ -265,15 +285,12 @@ jobs:
           name: OpenWrt 25.12.5 Cudy TR3000 - SSR Plus+ Xray 490MB UBI
           body: |
             OpenWrt 25.12.5 + SSR Plus+ (Xray only) + 强制 490MB UBI
-            - 主用 SSR Plus+（fw876/helloworld feed，后续 feeds update 可更新）
+            - DTS UBI: 0x1EA00000 (490MB)
+            - IMAGE_SIZE: 502784k (约 490MB，避免官方 64MB 限制导致无镜像)
+            - 主用 SSR Plus+（fw876/helloworld feed）
             - 仅 Xray 内核
-            - 已删除 PassWall / Nikki / MosDNS
-            - DTS 强制 UBI 0x1EA00000 (490MB)
-            - 默认屏蔽 IPv6
-            - 4G 驱动 + Argon
-          files: |
-            openwrt/bin/targets/mediatek/filogic/*cudy*
-            openwrt/bin/targets/mediatek/filogic/*tr3000*
+            - 默认屏蔽 IPv6 / 4G 驱动 / Argon
+          files: /tmp/fw/*
           draft: false
           prerelease: false
 
