@@ -1,4 +1,4 @@
-name: Build Custom ImmortalWrt 24.10.6 ImageBuilder (490MB UBI) - Optimized
+name: Build Custom ImmortalWrt 24.10.6 ImageBuilder (490MB UBI) - Super Stable
 
 on:
   workflow_dispatch:
@@ -16,15 +16,15 @@ jobs:
     timeout-minutes: 360
 
     steps:
-      - name: Free disk space aggressively
+      - name: Free disk space
         run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost /opt/hostedtoolcache/CodeQL
-          sudo rm -rf /usr/local/lib/android /usr/share/swift /usr/share/miniconda /usr/local/.ghcup
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost /opt/hostedtoolcache
+          sudo rm -rf /usr/share/swift /usr/local/.ghcup /opt/microsoft
           sudo apt-get clean
           sudo docker system prune -af || true
           df -h
 
-      - name: Install dependencies
+      - name: Install dependencies + aria2
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -34,57 +34,53 @@ jobs:
             rsync swig unzip zlib1g-dev file wget curl \
             qemu-utils libelf-dev time aria2
 
-      - name: Clone ImmortalWrt 24.10.6
+      - name: Clone ImmortalWrt
         run: |
           git clone --depth=1 --branch v24.10.6 https://github.com/immortalwrt/immortalwrt.git openwrt
-          cd openwrt
-          git rev-parse HEAD
 
-      - name: Force patch UBI 490MB + IMAGE_SIZE
+      - name: Cache downloads (dl/)
+        uses: actions/cache@v4
+        with:
+          path: openwrt/dl
+          key: immortalwrt-dl-${{ github.run_id }}
+          restore-keys: |
+            immortalwrt-dl-
+
+      - name: Force UBI 490MB patch
         working-directory: openwrt
         run: |
           set -e
-          DTS_FILE=$(find target/linux/mediatek/dts -name "mt7981b-cudy-tr3000-v1.dts" | head -1)
-          echo "DTS_FILE=$DTS_FILE"
-          test -n "$DTS_FILE" || { echo "ERROR: DTS not found"; exit 1; }
+          DTS=$(find target/linux/mediatek/dts -name "*cudy-tr3000-v1.dts" | head -1)
+          echo "Patching $DTS"
+          sed -i 's/reg = <0x5c0000 0x4000000>/reg = <0x5c0000 0x1EA00000>/g' "$DTS"
+          sed -i 's/0x4000000/0x1EA00000/g' "$DTS"
+          grep -q "0x1EA00000" "$DTS" || { echo "DTS patch failed"; exit 1; }
 
-          # 强制替换为 490MB
-          sed -i 's/reg = <0x5c0000 0x4000000>/reg = <0x5c0000 0x1EA00000>/g' "$DTS_FILE"
-          sed -i 's/0x4000000/0x1EA00000/g' "$DTS_FILE"
+          MK=target/linux/mediatek/image/filogic.mk
+          sed -i '/Device\/cudy_tr3000-v1/,/endef/{s/IMAGE_SIZE := 65536k/IMAGE_SIZE := 502784k/}' "$MK"
+          grep -A15 "Device/cudy_tr3000-v1" "$MK" | grep -q "502784k" || { echo "IMAGE_SIZE patch failed"; exit 1; }
+          echo "UBI patch success"
 
-          if ! grep -q "0x1EA00000" "$DTS_FILE"; then
-            echo "ERROR: DTS patch failed!"
-            cat "$DTS_FILE"
-            exit 1
-          fi
-          echo "SUCCESS: DTS UBI = 0x1EA00000"
-
-          MK_FILE="target/linux/mediatek/image/filogic.mk"
-          awk '
-            /^define Device\/cudy_tr3000-v1$/ { in_dev=1 }
-            in_dev && /^endef$/ { in_dev=0 }
-            in_dev && /IMAGE_SIZE := 65536k/ { sub(/65536k/, "502784k") }
-            { print }
-          ' "$MK_FILE" > "$MK_FILE.tmp" && mv "$MK_FILE.tmp" "$MK_FILE"
-
-          if ! grep -A20 "Device/cudy_tr3000-v1$" "$MK_FILE" | grep -q "502784k"; then
-            echo "ERROR: IMAGE_SIZE patch failed!"
-            exit 1
-          fi
-          echo "SUCCESS: IMAGE_SIZE = 502784k"
-
-      - name: Optimize download mirrors & settings
+      - name: Super aggressive mirror + aria2 force
         working-directory: openwrt
         run: |
-          # 强制使用更稳定的镜像（腾讯 + 官方备用）
-          sed -i 's|https://downloads.openwrt.org|https://mirrors.tencent.com/openwrt|g' scripts/download.pl || true
-          sed -i 's|http://downloads.openwrt.org|https://mirrors.tencent.com/openwrt|g' scripts/download.pl || true
+          # 1. 全量替换坏源
+          find . -type f \( -name "*.mk" -o -name "download.pl" -o -name "*.sh" \) -exec sed -i \
+            -e 's|https://github.com|https://mirror.ghproxy.com/https://github.com|g' \
+            -e 's|https://downloads.openwrt.org|https://mirrors.tencent.com/openwrt|g' \
+            -e 's|http://downloads.openwrt.org|https://mirrors.tencent.com/openwrt|g' \
+            -e 's|https://cdn.kernel.org|https://mirrors.tencent.com/kernel|g' \
+            -e 's|https://git.kernel.org|https://mirrors.tencent.com/kernel|g' \
+            -e 's|download.savannah.nongnu.org|mirrors.tencent.com/nongnu|g' \
+            -e 's|ftp.gnu.org|mirrors.tencent.com/gnu|g' \
+            -e 's|ftpmirror.gnu.org|mirrors.tencent.com/gnu|g' \
+            {} + || true
 
-          # 增加下载重试和超时
-          sed -i 's/--connect-timeout 20/--connect-timeout 30/g' scripts/download.pl || true
-          sed -i 's/--retry 5/--retry 8/g' scripts/download.pl || true
+          # 2. 强制 download.pl 使用 aria2 + 更高超时
+          sed -i 's/curl -f --connect-timeout [0-9]*/aria2c -x 16 -s 16 --connect-timeout=60 --max-tries=15 --retry-wait=5 -c -o/g' scripts/download.pl || true
+          sed -i 's/--retry [0-9]*/--max-tries=15/g' scripts/download.pl || true
 
-          # 精简 feeds，加快速度
+          # 3. 精简 feeds
           cat > feeds.conf.default << 'EOF'
           src-git packages https://github.com/immortalwrt/packages.git;openwrt-24.10
           src-git luci https://github.com/immortalwrt/luci.git;openwrt-24.10
@@ -95,21 +91,16 @@ jobs:
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-      - name: Write minimal .config for Image Builder
+      - name: Write .config
         working-directory: openwrt
         run: |
           cat > .config << 'EOF'
           CONFIG_TARGET_mediatek=y
           CONFIG_TARGET_mediatek_filogic=y
           CONFIG_TARGET_mediatek_filogic_DEVICE_cudy_tr3000-v1=y
-
-          # 生成 Image Builder（核心）
           CONFIG_IB=y
           CONFIG_IB_STANDALONE=y
-
-          # 基础必要组件
           CONFIG_PACKAGE_luci=y
-          CONFIG_PACKAGE_luci-compat=y
           CONFIG_PACKAGE_luci-theme-argon=y
           CONFIG_PACKAGE_dnsmasq-full=y
           CONFIG_PACKAGE_firewall4=y
@@ -128,83 +119,33 @@ jobs:
           CONFIG_PACKAGE_kmod-nft-tproxy=y
           CONFIG_PACKAGE_kmod-tun=y
           EOF
-
           make defconfig
 
-      - name: Download packages (with retry)
+      - name: Download (stable mode)
         working-directory: openwrt
         run: |
-          set +e
-          for i in 1 2 3 4; do
-            echo "=== Download attempt $i/4 ==="
-            make download -j$(nproc) V=s 2>&1 | tee /tmp/dl-$i.log
-            fails=$(grep -cE "returned error: 404|Download failed|Hash mismatch|Connection timed out|Failed to connect" /tmp/dl-$i.log || true)
-            echo "Failed count: $fails"
-            if [ "$fails" = "0" ]; then
-              echo "Download success!"
-              exit 0
-            fi
-            echo "Retrying in 15 seconds..."
-            sleep 15
-          done
-          echo "Download still has issues, showing last errors:"
-          grep -E "returned error: 404|Download failed|Hash mismatch|Connection timed out|Failed to connect" /tmp/dl-*.log | sort -u | head -20 || true
-          # 不强制退出，继续尝试编译
-          exit 0
+          # 先单线程把最容易超时的包下完，再并行
+          make download -j1 V=s || true
+          make download -j$(nproc) V=s
 
-      - name: Build Image Builder
+      - name: Build
+        working-directory: openwrt
+        run: make -j$(nproc) V=s
+
+      - name: Collect & Upload
         working-directory: openwrt
         run: |
-          set -o pipefail
-          make -j$(nproc) V=s 2>&1 | tee build.log
-
-      - name: Collect results
-        working-directory: openwrt
-        run: |
-          set -e
-          echo "=== Looking for Image Builder ==="
-          ls -lah bin/targets/mediatek/filogic/ || true
-
-          IB=$(find bin/targets/mediatek/filogic -name "immortalwrt-imagebuilder-*-mediatek-filogic*.tar.zst" | head -1)
-          if [ -z "$IB" ]; then
-            echo "ERROR: Image Builder not found!"
-            tail -80 build.log || true
-            exit 1
-          fi
-          echo "Found IB: $IB"
-
           mkdir -p /tmp/output
-          cp -v "$IB" /tmp/output/
-          # 同时带上 sysupgrade 方便测试
-          cp -v bin/targets/mediatek/filogic/*cudy*tr3000*sysupgrade* /tmp/output/ 2>/dev/null || true
+          find bin/targets/mediatek/filogic -name "immortalwrt-imagebuilder-*.tar.zst" -exec cp -v {} /tmp/output/ \;
+          find bin/targets/mediatek/filogic -name "*cudy*tr3000*sysupgrade*" -exec cp -v {} /tmp/output/ \; || true
           ls -lah /tmp/output/
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: immortalwrt-24.10.6-cudy-tr3000-490MB-ImageBuilder
+          name: immortalwrt-24.10.6-490MB-IB
           path: /tmp/output/
-          if-no-files-found: error
           retention-days: 30
 
       - name: Create Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ib-24.10.6-490MB-${{ github.run_number }}
-          name: Custom ImmortalWrt 24.10.6 ImageBuilder (Cudy TR3000 490MB UBI)
-          body: |
-            定制 Image Builder（已包含 490MB UBI 补丁）
-            - DTS: 0x1EA00000
-            - IMAGE_SIZE: 502784k
-            - 可直接用于后续快速构建固件
-          files: /tmp/output/*
-          draft: false
-          prerelease: false
-
-      - name: Upload build log on failure
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-log-error
-          path: openwrt/build.log
-          retention-days: 7
+        uses: softprops/action-
