@@ -1,84 +1,111 @@
-name: Build Custom ImmortalWrt 24.10.6 ImageBuilder (490MB UBI)
+name: Build Custom IB 24.10.6 490MB
 
 on:
   workflow_dispatch:
-
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 permissions:
   contents: write
 
 jobs:
-  build-ib:
+  build:
     runs-on: ubuntu-22.04
     timeout-minutes: 360
 
     steps:
-      - name: Free disk space
+      - name: Free space
         run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost /opt/hostedtoolcache
-          sudo rm -rf /usr/share/swift /usr/local/.ghcup /opt/microsoft
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache
           sudo apt-get clean
-          sudo docker system prune -af || true
           df -h
 
-      - name: Install dependencies
+      - name: Install deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            build-essential clang flex bison g++ gawk \
-            gcc-multilib g++-multilib gettext git \
-            libncurses5-dev libssl-dev python3-setuptools \
-            rsync swig unzip zlib1g-dev file wget curl \
-            qemu-utils libelf-dev time
+          sudo apt-get install -y build-essential clang flex bison g++ gawk \
+            gcc-multilib g++-multilib gettext git libncurses5-dev libssl-dev \
+            python3-setuptools rsync swig unzip zlib1g-dev file wget curl \
+            qemu-utils libelf-dev
 
-      - name: Clone ImmortalWrt
-        run: |
-          git clone --depth=1 --branch v24.10.6 https://github.com/immortalwrt/immortalwrt.git openwrt
+      - name: Clone
+        run: git clone --depth=1 --branch v24.10.6 https://github.com/immortalwrt/immortalwrt.git openwrt
 
-      - name: Cache dl
-        uses: actions/cache@v4
-        with:
-          path: openwrt/dl
-          key: immortalwrt-24.10.6-dl-${{ hashFiles('openwrt/feeds.conf.default') }}
-          restore-keys: |
-            immortalwrt-24.10.6-dl-
-
-      - name: Apply 490MB UBI patch
+      - name: Patch UBI 490MB
         working-directory: openwrt
         run: |
           set -e
           DTS=$(find target/linux/mediatek/dts -name "*cudy-tr3000-v1.dts" | head -1)
-          echo "Patching DTS: $DTS"
-          sed -i 's/reg = <0x5c0000 0x4000000>/reg = <0x5c0000 0x1EA00000>/g' "$DTS"
+          echo "Found DTS: $DTS"
           sed -i 's/0x4000000/0x1EA00000/g' "$DTS"
-          grep -q "0x1EA00000" "$DTS" || { echo "DTS patch failed"; exit 1; }
-          echo "DTS OK"
+          grep -q "0x1EA00000" "$DTS"
+          echo "DTS patched"
 
-          MK=target/linux/mediatek/image/filogic.mk
-          sed -i '/Device\/cudy_tr3000-v1/,/endef/{s/IMAGE_SIZE := 65536k/IMAGE_SIZE := 502784k/}' "$MK"
-          grep -A20 "Device/cudy_tr3000-v1" "$MK" | grep -q "502784k" || { echo "IMAGE_SIZE patch failed"; exit 1; }
-          echo "IMAGE_SIZE OK"
+          sed -i '/Device\/cudy_tr3000-v1/,/endef/{s/IMAGE_SIZE := 65536k/IMAGE_SIZE := 502784k/}' target/linux/mediatek/image/filogic.mk
+          grep -A10 "cudy_tr3000-v1" target/linux/mediatek/image/filogic.mk | grep 502784k
+          echo "IMAGE_SIZE patched"
 
-      - name: Use stable mirrors
+      - name: Feeds
         working-directory: openwrt
         run: |
-          # 只替换已知慢/不稳定的源，不破坏脚本
-          sed -i 's|https://downloads.openwrt.org|https://mirrors.tencent.com/openwrt|g' scripts/download.pl
-          sed -i 's|http://downloads.openwrt.org|https://mirrors.tencent.com/openwrt|g' scripts/download.pl
-          sed -i 's|https://cdn.kernel.org|https://mirrors.tencent.com/kernel|g' scripts/download.pl || true
-          sed -i 's|download.savannah.nongnu.org|mirrors.tencent.com/nongnu|g' scripts/download.pl || true
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
 
-          # 提高 curl 重试
-          sed -i 's/--connect-timeout 20/--connect-timeout 40/g' scripts/download.pl || true
-          sed -i 's/--retry 5/--retry 10/g' scripts/download.pl || true
-
-          cat > feeds.conf.default << 'EOF'
-          src-git packages https://github.com/immortalwrt/packages.git;openwrt-24.10
-          src-git luci https://github.com/immortalwrt/luci.git;openwrt-24.10
-          src-git routing https://github.com/openwrt/routing.git;openwrt-24.10
-          src-git telephony https://github.com/openwrt/telephony.git;openwrt-24.10
+      - name: Config
+        working-directory: openwrt
+        run: |
+          cat > .config << 'EOF'
+          CONFIG_TARGET_mediatek=y
+          CONFIG_TARGET_mediatek_filogic=y
+          CONFIG_TARGET_mediatek_filogic_DEVICE_cudy_tr3000-v1=y
+          CONFIG_IB=y
+          CONFIG_IB_STANDALONE=y
+          CONFIG_PACKAGE_luci=y
+          CONFIG_PACKAGE_luci-theme-argon=y
+          CONFIG_PACKAGE_dnsmasq-full=y
+          CONFIG_PACKAGE_firewall4=y
+          CONFIG_PACKAGE_kmod-usb3=y
+          CONFIG_PACKAGE_kmod-mt7915e=y
+          CONFIG_PACKAGE_kmod-mt7981-firmware=y
+          CONFIG_PACKAGE_mt7981-wo-firmware=y
+          CONFIG_PACKAGE_automount=y
+          CONFIG_PACKAGE_kmod-usb-net-cdc-ether=y
+          CONFIG_PACKAGE_kmod-usb-net-rndis=y
+          CONFIG_PACKAGE_kmod-usb-net-qmi-wwan=y
+          CONFIG_PACKAGE_kmod-usb-serial-option=y
+          CONFIG_PACKAGE_openssh-sftp-server=y
+          CONFIG_PACKAGE_curl=y
+          CONFIG_PACKAGE_ip-full=y
+          CONFIG_PACKAGE_kmod-nft-tproxy=y
+          CONFIG_PACKAGE_kmod-tun=y
           EOF
+          make defconfig
 
-          ./scripts/
+      - name: Download
+        working-directory: openwrt
+        run: make download -j$(nproc)
+
+      - name: Build
+        working-directory: openwrt
+        run: make -j$(nproc) V=s
+
+      - name: Collect
+        working-directory: openwrt
+        run: |
+          mkdir -p /tmp/out
+          cp -v bin/targets/mediatek/filogic/immortalwrt-imagebuilder-*.tar.zst /tmp/out/ || true
+          cp -v bin/targets/mediatek/filogic/*cudy*tr3000*sysupgrade* /tmp/out/ || true
+          ls -lah /tmp/out/
+          ls /tmp/out/immortalwrt-imagebuilder-*.tar.zst
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: custom-ib-490MB
+          path: /tmp/out/
+          retention-days: 15
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ib-24.10.6-490MB-${{ github.run_number }}
+          name: Custom IB 24.10.6 490MB
+          files: /tmp/out/*
