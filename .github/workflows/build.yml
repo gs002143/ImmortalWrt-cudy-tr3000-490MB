@@ -12,7 +12,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-22.04
-    timeout-minutes: 300
+    timeout-minutes: 360
 
     steps:
       - name: Free disk space
@@ -34,50 +34,34 @@ jobs:
         working-directory: openwrt
         run: |
           set -e
-
-          # 1) DTS: UBI 64MB -> 490MB
           DTS_FILE=$(find target/linux/mediatek/dts -name "mt7981b-cudy-tr3000-v1.dts" | head -1)
           echo "DTS_FILE=$DTS_FILE"
           test -n "$DTS_FILE" || { echo "ERROR: DTS not found"; exit 1; }
-          echo "=== DTS BEFORE ==="
-          grep -A3 -E "&ubi|reg =" "$DTS_FILE" || true
           sed -i 's/reg = <0x5c0000 0x4000000>/reg = <0x5c0000 0x1EA00000>/g' "$DTS_FILE"
           sed -i 's/0x4000000/0x1EA00000/g' "$DTS_FILE"
-          echo "=== DTS AFTER ==="
-          grep -n "0x1EA00000\|0x4000000\|ubi\|reg =" "$DTS_FILE" || true
           grep -q "0x1EA00000" "$DTS_FILE" || { echo "ERROR: DTS patch failed"; exit 1; }
-          ! grep -q "0x4000000" "$DTS_FILE" || { echo "ERROR: DTS still has 0x4000000"; exit 1; }
-          echo "SUCCESS: DTS UBI = 0x1EA00000 (490MB)"
+          echo "SUCCESS: DTS UBI = 0x1EA00000"
 
-          # 2) filogic.mk: IMAGE_SIZE 65536k -> 502784k (约 490MB)
-          # 官方默认 64MB，装 SSR Plus+ 会超限导致无镜像
           MK_FILE="target/linux/mediatek/image/filogic.mk"
-          test -f "$MK_FILE" || { echo "ERROR: filogic.mk not found"; exit 1; }
-          echo "=== filogic.mk cudy_tr3000-v1 section BEFORE ==="
-          grep -A20 "Device/cudy_tr3000-v1$" "$MK_FILE" | head -25 || true
-          # 只改 cudy_tr3000-v1 设备块里的 IMAGE_SIZE（用 awk 更安全）
           awk '
             /^define Device\/cudy_tr3000-v1$/ { in_dev=1 }
             in_dev && /^endef$/ { in_dev=0 }
             in_dev && /IMAGE_SIZE := 65536k/ { sub(/65536k/, "502784k") }
             { print }
           ' "$MK_FILE" > "$MK_FILE.tmp" && mv "$MK_FILE.tmp" "$MK_FILE"
-          echo "=== filogic.mk AFTER ==="
-          grep -A20 "Device/cudy_tr3000-v1$" "$MK_FILE" | head -25 || true
           grep -A15 "Device/cudy_tr3000-v1$" "$MK_FILE" | grep -q "502784k" || {
-            echo "ERROR: IMAGE_SIZE patch failed"
-            exit 1
+            echo "ERROR: IMAGE_SIZE patch failed"; exit 1
           }
-          echo "SUCCESS: IMAGE_SIZE = 502784k (~490MB)"
+          echo "SUCCESS: IMAGE_SIZE = 502784k"
 
-      - name: Setup feeds (helloworld)
+      - name: Setup feeds
         working-directory: openwrt
         run: |
           sed -i '/helloworld/d' feeds.conf.default
           echo "src-git helloworld https://github.com/fw876/helloworld.git;master" >> feeds.conf.default
           ./scripts/feeds update -a
           ./scripts/feeds install -a
-          test -d feeds/helloworld/luci-app-ssr-plus && echo "SSR Plus+ feed OK" || echo "WARNING: luci-app-ssr-plus missing"
+          test -d feeds/helloworld/luci-app-ssr-plus && echo "SSR Plus+ OK" || echo "WARNING: ssr-plus missing"
 
       - name: Add argon theme
         working-directory: openwrt
@@ -88,103 +72,140 @@ jobs:
         working-directory: openwrt
         run: |
           rm -f .config
-          printf "%s\n" "CONFIG_TARGET_mediatek=y" >> .config
-          printf "%s\n" "CONFIG_TARGET_mediatek_filogic=y" >> .config
-          printf "%s\n" "CONFIG_TARGET_mediatek_filogic_DEVICE_cudy_tr3000-v1=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_autocore=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_base-files=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_block-mount=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_ca-bundle=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_dnsmasq=n" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_dnsmasq-full=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_dropbear=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_firewall4=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_fstools=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_kmod-crypto-hw-safexcel=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_kmod-gpio-button-hotplug=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_kmod-leds-gpio=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_kmod-nf-nathelper=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_kmod-nf-nathelper-extra=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_kmod-nft-offload=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_kmod-phy-aquantia=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_libc=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_libgcc=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_libustream-openssl=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_logd=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_luci=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_luci-compat=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_luci-lib-base=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_luci-light=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_mtd=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_netifd=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_nftables=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_odhcp6c=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_odhcpd-ipv6only=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_ppp=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_ppp-mod-pppoe=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_procd-ujail=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_uboot-envtools=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_uci=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_uclient-fetch=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_urandom-seed=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_urngd=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_wpad-openssl=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_kmod-usb3=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_kmod-mt7915e=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_kmod-mt7981-firmware=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_mt7981-wo-firmware=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_automount=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_luci-theme-argon=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_luci-app-upnp=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_miniupnpd-nftables=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_kmod-nft-nat=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_kmod-nf-nat=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_kmod-nft-core=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_kmod-nft-fib=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_kmod-mii=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_kmod-usb-net=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_kmod-usb-net-cdc-ether=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_kmod-usb-net-rndis=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_kmod-usb-storage=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_kmod-usb-storage-uas=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_kmod-scsi-core=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_kmod-fs-ext4=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_kmod-fs-exfat=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_kmod-fs-vfat=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_kmod-nls-utf8=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_kmod-nls-cp437=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_kmod-nls-iso8859-1=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_e2fsprogs=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_kmod-nf-socket=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_kmod-nft-socket=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_kmod-nft-tproxy=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_kmod-nf-tproxy=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_kmod-tun=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_kmod-inet-diag=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_kmod-dummy=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_kmod-nf-conntrack-netlink=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_luci-app-ssr-plus=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Xray=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_NONE_V2RAY=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_V2ray=n" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_ChinaDNS_NG=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_xray-core=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_chinadns-ng=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_v2ray-geoip=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_v2ray-geosite=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_ip-full=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_curl=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_openssh-sftp-server=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_kmod-usb-serial=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_kmod-usb-serial-option=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_kmod-usb-serial-wwan=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_kmod-usb-net-qmi-wwan=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_kmod-usb-net-cdc-mbim=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_kmod-usb-net-cdc-ncm=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_kmod-usb-wdm=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_luci-proto-qmi=y" >> .config
-          printf "%s\n" "CONFIG_PACKAGE_luci-proto-mbim=y" >> .config
+          cat >> .config << 'EOF'
+          CONFIG_TARGET_mediatek=y
+          CONFIG_TARGET_mediatek_filogic=y
+          CONFIG_TARGET_mediatek_filogic_DEVICE_cudy_tr3000-v1=y
+          CONFIG_PACKAGE_autocore=y
+          CONFIG_PACKAGE_base-files=y
+          CONFIG_PACKAGE_block-mount=y
+          CONFIG_PACKAGE_ca-bundle=y
+          CONFIG_PACKAGE_dnsmasq=n
+          CONFIG_PACKAGE_dnsmasq-full=y
+          CONFIG_PACKAGE_dropbear=y
+          CONFIG_PACKAGE_firewall4=y
+          CONFIG_PACKAGE_fstools=y
+          CONFIG_PACKAGE_kmod-crypto-hw-safexcel=y
+          CONFIG_PACKAGE_kmod-gpio-button-hotplug=y
+          CONFIG_PACKAGE_kmod-leds-gpio=y
+          CONFIG_PACKAGE_kmod-nf-nathelper=y
+          CONFIG_PACKAGE_kmod-nf-nathelper-extra=y
+          CONFIG_PACKAGE_kmod-nft-offload=y
+          CONFIG_PACKAGE_kmod-phy-aquantia=y
+          CONFIG_PACKAGE_libc=y
+          CONFIG_PACKAGE_libgcc=y
+          CONFIG_PACKAGE_libustream-openssl=y
+          CONFIG_PACKAGE_logd=y
+          CONFIG_PACKAGE_luci=y
+          CONFIG_PACKAGE_luci-compat=y
+          CONFIG_PACKAGE_luci-lib-base=y
+          CONFIG_PACKAGE_luci-light=y
+          CONFIG_PACKAGE_mtd=y
+          CONFIG_PACKAGE_netifd=y
+          CONFIG_PACKAGE_nftables=y
+          CONFIG_PACKAGE_odhcp6c=y
+          CONFIG_PACKAGE_odhcpd-ipv6only=y
+          CONFIG_PACKAGE_ppp=y
+          CONFIG_PACKAGE_ppp-mod-pppoe=y
+          CONFIG_PACKAGE_procd-ujail=y
+          CONFIG_PACKAGE_uboot-envtools=y
+          CONFIG_PACKAGE_uci=y
+          CONFIG_PACKAGE_uclient-fetch=y
+          CONFIG_PACKAGE_urandom-seed=y
+          CONFIG_PACKAGE_urngd=y
+          CONFIG_PACKAGE_wpad-openssl=y
+          CONFIG_PACKAGE_kmod-usb3=y
+          CONFIG_PACKAGE_kmod-mt7915e=y
+          CONFIG_PACKAGE_kmod-mt7981-firmware=y
+          CONFIG_PACKAGE_mt7981-wo-firmware=y
+          CONFIG_PACKAGE_automount=y
+          CONFIG_PACKAGE_luci-theme-argon=y
+          CONFIG_PACKAGE_luci-app-upnp=y
+          CONFIG_PACKAGE_miniupnpd-nftables=y
+          CONFIG_PACKAGE_kmod-nft-nat=y
+          CONFIG_PACKAGE_kmod-nf-nat=y
+          CONFIG_PACKAGE_kmod-nft-core=y
+          CONFIG_PACKAGE_kmod-nft-fib=y
+          CONFIG_PACKAGE_kmod-mii=y
+          CONFIG_PACKAGE_kmod-usb-net=y
+          CONFIG_PACKAGE_kmod-usb-net-cdc-ether=y
+          CONFIG_PACKAGE_kmod-usb-net-rndis=y
+          CONFIG_PACKAGE_kmod-usb-storage=y
+          CONFIG_PACKAGE_kmod-usb-storage-uas=y
+          CONFIG_PACKAGE_kmod-scsi-core=y
+          CONFIG_PACKAGE_kmod-fs-ext4=y
+          CONFIG_PACKAGE_kmod-fs-exfat=y
+          CONFIG_PACKAGE_kmod-fs-vfat=y
+          CONFIG_PACKAGE_kmod-nls-utf8=y
+          CONFIG_PACKAGE_kmod-nls-cp437=y
+          CONFIG_PACKAGE_kmod-nls-iso8859-1=y
+          CONFIG_PACKAGE_e2fsprogs=y
+          CONFIG_PACKAGE_kmod-nf-socket=y
+          CONFIG_PACKAGE_kmod-nft-socket=y
+          CONFIG_PACKAGE_kmod-nft-tproxy=y
+          CONFIG_PACKAGE_kmod-nf-tproxy=y
+          CONFIG_PACKAGE_kmod-tun=y
+          CONFIG_PACKAGE_kmod-inet-diag=y
+          CONFIG_PACKAGE_kmod-dummy=y
+          CONFIG_PACKAGE_kmod-nf-conntrack-netlink=y
+          CONFIG_PACKAGE_luci-app-ssr-plus=y
+          CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Xray=y
+          CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_NONE_V2RAY=y
+          CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_ChinaDNS_NG=y
+          CONFIG_PACKAGE_xray-core=y
+          CONFIG_PACKAGE_chinadns-ng=y
+          CONFIG_PACKAGE_v2ray-geoip=y
+          CONFIG_PACKAGE_v2ray-geosite=y
+          CONFIG_PACKAGE_ip-full=y
+          CONFIG_PACKAGE_curl=y
+          CONFIG_PACKAGE_openssh-sftp-server=y
+          CONFIG_PACKAGE_kmod-usb-serial=y
+          CONFIG_PACKAGE_kmod-usb-serial-option=y
+          CONFIG_PACKAGE_kmod-usb-serial-wwan=y
+          CONFIG_PACKAGE_kmod-usb-net-qmi-wwan=y
+          CONFIG_PACKAGE_kmod-usb-net-cdc-mbim=y
+          CONFIG_PACKAGE_kmod-usb-net-cdc-ncm=y
+          CONFIG_PACKAGE_kmod-usb-wdm=y
+          CONFIG_PACKAGE_luci-proto-qmi=y
+          CONFIG_PACKAGE_luci-proto-mbim=y
+          EOF
+          sed -i 's/^[[:space:]]*//' .config
+
+          # 关闭会触发 hash mismatch / 不需要的组件
+          cat >> .config << 'EOF'
+          # CONFIG_PACKAGE_simple-obfs is not set
+          # CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Shadowsocks_Simple_Obfs is not set
+          # CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_V2ray is not set
+          # CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Kcptun is not set
+          # CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Hysteria is not set
+          # CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_NaiveProxy is not set
+          # CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Trojan is not set
+          # CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Shadowsocks_Libev_Client is not set
+          # CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Shadowsocks_Libev_Server is not set
+          # CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_ShadowsocksR_Libev_Client is not set
+          # CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Shadowsocks_Rust_Client is not set
+          # CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Shadowsocks_Rust_Server is not set
+          # CONFIG_PACKAGE_shadowsocks-libev-ss-local is not set
+          # CONFIG_PACKAGE_shadowsocks-libev-ss-redir is not set
+          # CONFIG_PACKAGE_shadowsocks-rust-sslocal is not set
+          # CONFIG_PACKAGE_shadowsocksr-libev-ssr-local is not set
+          # CONFIG_PACKAGE_shadowsocksr-libev-ssr-redir is not set
+          # CONFIG_PACKAGE_kcptun-client is not set
+          # CONFIG_PACKAGE_hysteria is not set
+          # CONFIG_PACKAGE_naiveproxy is not set
+          # CONFIG_PACKAGE_trojan is not set
+          # CONFIG_PACKAGE_v2ray-core is not set
+          # CONFIG_PACKAGE_v2ray-plugin is not set
+          # CONFIG_PACKAGE_xray-plugin is not set
+          # CONFIG_PACKAGE_mosdns is not set
+          EOF
+          sed -i 's/^[[:space:]]*//' .config
           make defconfig
+
+          # defconfig 后再次强制关闭（防止被默认选上）
+          sed -i 's/CONFIG_PACKAGE_simple-obfs=y/# CONFIG_PACKAGE_simple-obfs is not set/' .config || true
+          sed -i 's/CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Shadowsocks_Simple_Obfs=y/# CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Shadowsocks_Simple_Obfs is not set/' .config || true
+          grep -E "simple-obfs|INCLUDE_Xray|ssr-plus=y" .config || true
 
       - name: Write first-boot script
         working-directory: openwrt
@@ -233,12 +254,12 @@ jobs:
           for i in 1 2 3; do
             echo "=== Download attempt $i/3 ==="
             make download -j$(nproc) V=s 2>&1 | tee /tmp/dl-$i.log
-            fails=$(grep -cE "returned error: 404|Download failed" /tmp/dl-$i.log || true)
+            fails=$(grep -cE "returned error: 404|Download failed|Hash mismatch" /tmp/dl-$i.log || true)
             echo "Failed count: $fails"
             [ "$fails" = "0" ] && exit 0
             sleep 20
           done
-          grep -E "returned error: 404|Download failed" /tmp/dl-*.log | sort -u | head -30 || true
+          grep -E "returned error: 404|Download failed|Hash mismatch" /tmp/dl-*.log | sort -u | head -30 || true
           exit 0
 
       - name: Build firmware
@@ -246,23 +267,18 @@ jobs:
         run: |
           set -o pipefail
           make -j$(nproc) V=s 2>&1 | tee build.log
-          # 上面失败会直接让 step 失败（不再 || true）
 
       - name: Check and collect firmware
         working-directory: openwrt
         run: |
           set -e
-          echo "=== All files in filogic ==="
           ls -lah bin/targets/mediatek/filogic/ || true
-          echo "=== Looking for firmware ==="
           find bin/targets/mediatek/filogic -type f \( -name "*cudy*" -o -name "*tr3000*" \) -ls || true
-          # 必须至少有一个 sysupgrade 相关文件
-          count=$(find bin/targets/mediatek/filogic -type f \( -name "*sysupgrade*" -o -name "*cudy*tr3000*" \) | wc -l)
+          count=$(find bin/targets/mediatek/filogic -type f \( -name "*sysupgrade*" -o -name "*cudy*tr3000*" \) 2>/dev/null | wc -l)
           echo "Firmware file count: $count"
           if [ "$count" -eq 0 ]; then
             echo "ERROR: No firmware produced!"
-            echo "=== Last 80 lines of build.log ==="
-            tail -80 build.log || true
+            tail -100 build.log || true
             exit 1
           fi
           mkdir -p /tmp/fw
@@ -285,11 +301,9 @@ jobs:
           name: OpenWrt 25.12.5 Cudy TR3000 - SSR Plus+ Xray 490MB UBI
           body: |
             OpenWrt 25.12.5 + SSR Plus+ (Xray only) + 强制 490MB UBI
-            - DTS UBI: 0x1EA00000 (490MB)
-            - IMAGE_SIZE: 502784k (约 490MB，避免官方 64MB 限制导致无镜像)
-            - 主用 SSR Plus+（fw876/helloworld feed）
-            - 仅 Xray 内核
-            - 默认屏蔽 IPv6 / 4G 驱动 / Argon
+            - 已关闭 simple-obfs 等非 Xray 组件（避免 hash mismatch）
+            - DTS UBI 0x1EA00000 / IMAGE_SIZE 502784k
+            - fw876/helloworld feed
           files: /tmp/fw/*
           draft: false
           prerelease: false
