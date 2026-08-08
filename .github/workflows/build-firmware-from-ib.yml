@@ -39,13 +39,12 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Extract ImageBuilder
-        id: extract
         run: |
           cd /tmp
           tar --zstd -xvf immortalwrt-imagebuilder-*.tar.zst
           IB_DIR=$(find /tmp -maxdepth 1 -type d -name "immortalwrt-imagebuilder-*" | head -1)
           if [ -z "$IB_DIR" ]; then
-            echo "ERROR: ImageBuilder directory not found after extract!"
+            echo "ERROR: ImageBuilder directory not found!"
             ls -lah /tmp/
             exit 1
           fi
@@ -95,18 +94,4 @@ jobs:
           mkdir -p /etc/opkg
           cat >> /etc/opkg/customfeeds.conf << 'FEEDS'
           src/gz passwall_luci https://master.dl.sourceforge.net/project/openwrt-passwall-build/releases/packages-24.10/aarch64_cortex-a53/passwall_luci
-          src/gz passwall_packages https://master.dl.sourceforge.net/project/openwrt-passwall-build/releases/packages-24.10/aarch64_cortex-a53/passwall_packages
-          FEEDS
-          exit 0
-          SCRIPT
-          chmod +x files/etc/uci-defaults/99-custom-init.sh
-
-          # 下载 Passwall 相关 ipk（仅 Xray）
-          mkdir -p packages
-          cd packages
-          wget -q --timeout=30 --tries=3 \
-            https://master.dl.sourceforge.net/project/openwrt-passwall-build/releases/packages-24.10/aarch64_cortex-a53/passwall_luci/luci-app-passwall_*.ipk || true
-          wget -q --timeout=30 --tries=3 \
-            https://master.dl.sourceforge.net/project/openwrt-passwall-build/releases/packages-24.10/aarch64_cortex-a53/passwall_packages/xray-core_*.ipk || true
-          wget -q --timeout=30 --tries=3 \
-            https://master.dl.sourceforge.net/project/openwrt-passwall-build/releases/packages-24.10/aarch64_
+          src/gz pass
