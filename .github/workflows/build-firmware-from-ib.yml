@@ -55,10 +55,8 @@ jobs:
       - name: Prepare first-boot + packages
         run: |
           cd "$IB_DIR"
-          
-          # first-boot 脚本
           mkdir -p files/etc/uci-defaults
-          cat > files/etc/uci-defaults/99-custom-init.sh << 'SCRIPT'
+          cat > files/etc/uci-defaults/99-custom-init.sh << 'EOF'
           #!/bin/sh
           passwd -d root
           uci set network.lan.ipaddr='192.168.1.1'
@@ -74,10 +72,8 @@ jobs:
           uci commit network
           uci commit dhcp
           mkdir -p /etc/sysctl.d
-          cat > /etc/sysctl.d/99-disable-ipv6.conf << EOF
-          net.ipv6.conf.all.disable_ipv6 = 1
-          net.ipv6.conf.default.disable_ipv6 = 1
-          EOF
+          echo "net.ipv6.conf.all.disable_ipv6 = 1" > /etc/sysctl.d/99-disable-ipv6.conf
+          echo "net.ipv6.conf.default.disable_ipv6 = 1" >> /etc/sysctl.d/99-disable-ipv6.conf
           sysctl -p /etc/sysctl.d/99-disable-ipv6.conf 2>/dev/null || true
           uci set wireless.@wifi-device[0].disabled='0' 2>/dev/null || true
           uci set wireless.@wifi-iface[0].disabled='0' 2>/dev/null || true
@@ -92,6 +88,56 @@ jobs:
           uci set luci.main.mediaurlbase='/luci-static/argon' 2>/dev/null || true
           uci commit luci 2>/dev/null || true
           mkdir -p /etc/opkg
-          cat >> /etc/opkg/customfeeds.conf << 'FEEDS'
-          src/gz passwall_luci https://master.dl.sourceforge.net/project/openwrt-passwall-build/releases/packages-24.10/aarch64_cortex-a53/passwall_luci
-          src/gz pass
+          echo "src/gz passwall_luci https://master.dl.sourceforge.net/project/openwrt-passwall-build/releases/packages-24.10/aarch64_cortex-a53/passwall_luci" >> /etc/opkg/customfeeds.conf
+          echo "src/gz passwall_packages https://master.dl.sourceforge.net/project/openwrt-passwall-build/releases/packages-24.10/aarch64_cortex-a53/passwall_packages" >> /etc/opkg/customfeeds.conf
+          exit 0
+          EOF
+          chmod +x files/etc/uci-defaults/99-custom-init.sh
+
+          mkdir -p packages
+          cd packages
+          set +e
+          wget -q --timeout=60 --tries=3 -O luci-app-passwall.ipk "https://master.dl.sourceforge.net/project/openwrt-passwall-build/releases/packages-24.10/aarch64_cortex-a53/passwall_luci/luci-app-passwall_26.8.1-r1_all.ipk"
+          wget -q --timeout=60 --tries=3 -O xray-core.ipk "https://master.dl.sourceforge.net/project/openwrt-passwall-build/releases/packages-24.10/aarch64_cortex-a53/passwall_packages/xray-core_26.7.28-r1_aarch64_cortex-a53.ipk"
+          wget -q --timeout=60 --tries=3 -O v2ray-geoip.ipk "https://master.dl.sourceforge.net/project/openwrt-passwall-build/releases/packages-24.10/aarch64_cortex-a53/passwall_packages/v2ray-geoip_202607230036.1_all.ipk"
+          wget -q --timeout=60 --tries=3 -O v2ray-geosite.ipk "https://master.dl.sourceforge.net/project/openwrt-passwall-build/releases/packages-24.10/aarch64_cortex-a53/passwall_packages/v2ray-geosite_202607272255.1_all.ipk"
+          wget -q --timeout=60 --tries=3 -O chinadns-ng.ipk "https://master.dl.sourceforge.net/project/openwrt-passwall-build/releases/packages-24.10/aarch64_cortex-a53/passwall_packages/chinadns-ng_2025.08.09-r1_aarch64_cortex-a53.ipk"
+          ls -lah
+          set -e
+          cd "$IB_DIR"
+
+      - name: Build firmware
+        run: |
+          cd "$IB_DIR"
+          PACKAGES="luci-app-passwall xray-core chinadns-ng v2ray-geoip v2ray-geosite luci-theme-argon openssh-sftp-server curl ip-full kmod-usb-net-qmi-wwan kmod-usb-serial-option luci-proto-qmi kmod-usb-net-cdc-ether kmod-usb-net-rndis -dnsmasq"
+          if [ -n "${{ inputs.extra_packages }}" ]; then
+            PACKAGES="$PACKAGES ${{ inputs.extra_packages }}"
+          fi
+          echo "PACKAGES = $PACKAGES"
+          make image PROFILE="cudy_tr3000-v1" PACKAGES="$PACKAGES" FILES="files" BIN_DIR="/tmp/fw"
+
+      - name: Collect
+        run: |
+          mkdir -p final
+          cp -v /tmp/fw/*cudy* /tmp/fw/*tr3000* final/ 2>/dev/null || true
+          ls -lah final/
+          test -n "$(ls final/ 2>/dev/null)" || { echo "No firmware generated!"; exit 1; }
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-490MB-${{ github.run_number }}
+          path: final/
+          retention-days: 14
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: firmware-490MB-${{ github.run_number }}
+          name: ImmortalWrt 24.10.6 Cudy TR3000 490MB Firmware
+          body: |
+            使用定制 490MB UBI ImageBuilder 快速构建
+            - Passwall（仅 Xray）
+            - 默认双频 Wi-Fi、192.168.1.1、禁用 IPv6、Argon、空密码
+            - 支持中兴 F50 + 大疆/Volive 4G 模块
+          files: final/*
