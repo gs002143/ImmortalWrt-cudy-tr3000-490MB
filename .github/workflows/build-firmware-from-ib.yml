@@ -4,16 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       ib_tag:
-        description: '定制 IB 的 Release Tag（例如 ib-24.10.6-490MB-3）'
+        description: '定制 IB 的 Release Tag（例如 ib-24.10.6-490MB-6）'
         required: true
-        default: 'ib-24.10.6-490MB-1'
+        default: 'ib-24.10.6-490MB-6'
       extra_packages:
         description: '额外包（空格分隔，可留空）'
         required: false
         default: ''
-
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 permissions:
   contents: write
@@ -21,20 +18,20 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-22.04
-    timeout-minutes: 30   # 正常几分钟就够
+    timeout-minutes: 30
 
     steps:
       - name: Free disk space
         run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache
           sudo apt-get clean
+          df -h
 
       - name: Download Custom ImageBuilder
         run: |
-          # 从你自己仓库的 Release 下载定制 IB
-          # 请把 OWNER/REPO 改成你的仓库名
-          gh release download ${{ inputs.ib_tag }} \
-            --repo ${{ github.repository }} \
+          echo "Downloading from tag: ${{ inputs.ib_tag }}"
+          gh release download "${{ inputs.ib_tag }}" \
+            --repo "${{ github.repository }}" \
             --pattern "immortalwrt-imagebuilder-*.tar.zst" \
             --dir /tmp
           ls -lah /tmp/
@@ -42,18 +39,25 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Extract ImageBuilder
+        id: extract
         run: |
           cd /tmp
           tar --zstd -xvf immortalwrt-imagebuilder-*.tar.zst
-          IB_DIR=$(find . -maxdepth 1 -type d -name "immortalwrt-imagebuilder-*" | head -1)
+          IB_DIR=$(find /tmp -maxdepth 1 -type d -name "immortalwrt-imagebuilder-*" | head -1)
+          if [ -z "$IB_DIR" ]; then
+            echo "ERROR: ImageBuilder directory not found after extract!"
+            ls -lah /tmp/
+            exit 1
+          fi
           echo "IB_DIR=$IB_DIR" >> $GITHUB_ENV
-          echo "Extracted to $IB_DIR"
-          ls -lah $IB_DIR
+          echo "Extracted to: $IB_DIR"
+          ls -lah "$IB_DIR"
 
-      - name: Prepare first-boot script + packages
-        working-directory: ${{ env.IB_DIR }}
+      - name: Prepare first-boot + packages
         run: |
-          # 1. first-boot 脚本（默认配置）
+          cd "$IB_DIR"
+          
+          # first-boot 脚本
           mkdir -p files/etc/uci-defaults
           cat > files/etc/uci-defaults/99-custom-init.sh << 'SCRIPT'
           #!/bin/sh
@@ -71,8 +75,10 @@ jobs:
           uci commit network
           uci commit dhcp
           mkdir -p /etc/sysctl.d
-          echo "net.ipv6.conf.all.disable_ipv6 = 1" > /etc/sysctl.d/99-disable-ipv6.conf
-          echo "net.ipv6.conf.default.disable_ipv6 = 1" >> /etc/sysctl.d/99-disable-ipv6.conf
+          cat > /etc/sysctl.d/99-disable-ipv6.conf << EOF
+          net.ipv6.conf.all.disable_ipv6 = 1
+          net.ipv6.conf.default.disable_ipv6 = 1
+          EOF
           sysctl -p /etc/sysctl.d/99-disable-ipv6.conf 2>/dev/null || true
           uci set wireless.@wifi-device[0].disabled='0' 2>/dev/null || true
           uci set wireless.@wifi-iface[0].disabled='0' 2>/dev/null || true
@@ -86,7 +92,6 @@ jobs:
           wifi up 2>/dev/null || true
           uci set luci.main.mediaurlbase='/luci-static/argon' 2>/dev/null || true
           uci commit luci 2>/dev/null || true
-          # Passwall 更新源
           mkdir -p /etc/opkg
           cat >> /etc/opkg/customfeeds.conf << 'FEEDS'
           src/gz passwall_luci https://master.dl.sourceforge.net/project/openwrt-passwall-build/releases/packages-24.10/aarch64_cortex-a53/passwall_luci
@@ -96,62 +101,12 @@ jobs:
           SCRIPT
           chmod +x files/etc/uci-defaults/99-custom-init.sh
 
-          # 2. 下载常用第三方 ipk（Passwall + Xray 等，SSR-Plus 如果需要可再加）
+          # 下载 Passwall 相关 ipk（仅 Xray）
           mkdir -p packages
           cd packages
-          # Passwall 官方预编译（24.10 aarch64）
-          wget -q https://master.dl.sourceforge.net/project/openwrt-passwall-build/releases/packages-24.10/aarch64_cortex-a53/passwall_luci/luci-app-passwall_*.ipk || true
-          wget -q https://master.dl.sourceforge.net/project/openwrt-passwall-build/releases/packages-24.10/aarch64_cortex-a53/passwall_packages/xray-core_*.ipk || true
-          wget -q https://master.dl.sourceforge.net/project/openwrt-passwall-build/releases/packages-24.10/aarch64_cortex-a53/passwall_packages/v2ray-geoip_*.ipk || true
-          wget -q https://master.dl.sourceforge.net/project/openwrt-passwall-build/releases/packages-24.10/aarch64_cortex-a53/passwall_packages/v2ray-geosite_*.ipk || true
-          wget -q https://master.dl.sourceforge.net/project/openwrt-passwall-build/releases/packages-24.10/aarch64_cortex-a53/passwall_packages/chinadns-ng_*.ipk || true
-          # 你也可以在这里继续 wget 其他 ipk
-          ls -lah
-          cd ..
-
-      - name: Build firmware (fast)
-        working-directory: ${{ env.IB_DIR }}
-        run: |
-          # 核心包列表（仅 Xray）
-          PACKAGES="luci-app-passwall xray-core chinadns-ng v2ray-geoip v2ray-geosite luci-theme-argon openssh-sftp-server curl ip-full kmod-usb-net-qmi-wwan kmod-usb-serial-option luci-proto-qmi kmod-usb-net-cdc-ether kmod-usb-net-rndis -dnsmasq"
-          
-          # 加上用户额外包
-          if [ -n "${{ inputs.extra_packages }}" ]; then
-            PACKAGES="$PACKAGES ${{ inputs.extra_packages }}"
-          fi
-          
-          echo "Building with PACKAGES: $PACKAGES"
-          make image \
-            PROFILE="cudy_tr3000-v1" \
-            PACKAGES="$PACKAGES" \
-            FILES="files" \
-            BIN_DIR="/tmp/fw"
-
-      - name: Collect & Upload
-        run: |
-          ls -lah /tmp/fw/
-          mkdir -p final
-          cp -v /tmp/fw/*cudy* /tmp/fw/*tr3000* final/ 2>/dev/null || true
-          ls -lah final/
-
-      - name: Upload Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: firmware-from-custom-ib-${{ github.run_number }}
-          path: final/
-          if-no-files-found: error
-          retention-days: 14
-
-      - name: Create Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: firmware-490MB-${{ github.run_number }}
-          name: ImmortalWrt 24.10.6 Cudy TR3000 490MB (from Custom IB)
-          body: |
-            使用定制 490MB UBI ImageBuilder 快速构建
-            - Passwall (仅 Xray)
-            - 默认双频 Wi-Fi、192.168.1.1、禁用 IPv6、Argon、空密码
-            - 支持中兴 F50 + 大疆/Volive 4G 模块
-          files: final/*
-          draft: false
-          prerelease: false
+          wget -q --timeout=30 --tries=3 \
+            https://master.dl.sourceforge.net/project/openwrt-passwall-build/releases/packages-24.10/aarch64_cortex-a53/passwall_luci/luci-app-passwall_*.ipk || true
+          wget -q --timeout=30 --tries=3 \
+            https://master.dl.sourceforge.net/project/openwrt-passwall-build/releases/packages-24.10/aarch64_cortex-a53/passwall_packages/xray-core_*.ipk || true
+          wget -q --timeout=30 --tries=3 \
+            https://master.dl.sourceforge.net/project/openwrt-passwall-build/releases/packages-24.10/aarch64_
