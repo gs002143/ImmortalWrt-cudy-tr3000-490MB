@@ -52,7 +52,7 @@ jobs:
           echo "Extracted to: $IB_DIR"
           ls -lah "$IB_DIR"
 
-      - name: Prepare first-boot script
+      - name: Prepare first-boot + try SSR Plus+ packages
         run: |
           cd "$IB_DIR"
           mkdir -p files/etc/uci-defaults
@@ -94,50 +94,11 @@ jobs:
           EOF
           chmod +x files/etc/uci-defaults/99-custom-init.sh
 
-      - name: Build firmware
-        run: |
-          cd "$IB_DIR"
-          PACKAGES="luci luci-theme-argon openssh-sftp-server curl ip-full \
-            kmod-usb-net-qmi-wwan kmod-usb-serial-option \
-            kmod-usb-net-cdc-ether kmod-usb-net-rndis \
-            -dnsmasq"
-          if [ -n "${{ inputs.extra_packages }}" ]; then
-            PACKAGES="$PACKAGES ${{ inputs.extra_packages }}"
-          fi
-          echo "Building with PACKAGES: $PACKAGES"
-          make image PROFILE="cudy_tr3000-v1" PACKAGES="$PACKAGES" FILES="files" BIN_DIR="/tmp/fw"
-
-      - name: Collect firmware
-        run: |
-          mkdir -p final
-          cp -v /tmp/fw/*cudy* /tmp/fw/*tr3000* final/ 2>/dev/null || true
-          ls -lah final/
-          if [ -z "$(ls -A final 2>/dev/null)" ]; then
-            echo "ERROR: 没有生成固件"
-            ls -lah /tmp/fw/ || true
-            exit 1
-          fi
-
-      - name: Upload Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: firmware-490MB-${{ github.run_number }}
-          path: final/
-          retention-days: 14
-
-      - name: Create Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: firmware-490MB-${{ github.run_number }}
-          name: ImmortalWrt 24.10.6 Cudy TR3000 490MB Firmware
-          body: |
-            使用定制 490MB UBI ImageBuilder 构建
-            - 默认双频 Wi-Fi（Cudy / Cudy-5G）
-            - LAN: 192.168.1.1
-            - 禁用 IPv6
-            - Argon 主题 + 空密码
-            - 4G 模块驱动已包含
-            - 刷机后安装 Passwall：
-              opkg update
-              opkg install luci-app-passwall xray-core
-          files: final/*
+          # 尝试下载 SSR Plus+ 相关包（失败不中断）
+          mkdir -p packages
+          cd packages
+          set +e
+          # luci-app-ssr-plus (all 架构)
+          wget -q --timeout=60 --tries=3 -O luci-app-ssr-plus.ipk \
+            "https://github.com/fw876/helloworld/releases/download/v196.7/luci-app-ssr-plus_196-r7_all.ipk" || \
+          wget -q --timeout=60 --tries=3
