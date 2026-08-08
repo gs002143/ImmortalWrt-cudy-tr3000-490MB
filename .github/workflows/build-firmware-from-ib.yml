@@ -58,15 +58,10 @@ jobs:
           mkdir -p files/etc/uci-defaults
           cat > files/etc/uci-defaults/99-custom-init.sh << 'EOF'
           #!/bin/sh
-          # 清空 root 密码
           passwd -d root
-
-          # LAN IP
           uci set network.lan.ipaddr='192.168.1.1'
           uci set network.lan.netmask='255.255.255.0'
           uci commit network
-
-          # 彻底禁用 IPv6
           uci set network.lan.ipv6='0'
           uci set network.wan.ipv6='0'
           uci -q delete network.wan6 || true
@@ -80,8 +75,6 @@ jobs:
           echo "net.ipv6.conf.all.disable_ipv6 = 1" > /etc/sysctl.d/99-disable-ipv6.conf
           echo "net.ipv6.conf.default.disable_ipv6 = 1" >> /etc/sysctl.d/99-disable-ipv6.conf
           sysctl -p /etc/sysctl.d/99-disable-ipv6.conf 2>/dev/null || true
-
-          # 默认双频 Wi-Fi
           uci set wireless.@wifi-device[0].disabled='0' 2>/dev/null || true
           uci set wireless.@wifi-iface[0].disabled='0' 2>/dev/null || true
           uci set wireless.@wifi-iface[0].ssid='Cudy' 2>/dev/null || true
@@ -92,40 +85,27 @@ jobs:
           uci set wireless.@wifi-iface[1].encryption='none' 2>/dev/null || true
           uci commit wireless 2>/dev/null || true
           wifi up 2>/dev/null || true
-
-          # Argon 主题
           uci set luci.main.mediaurlbase='/luci-static/argon' 2>/dev/null || true
           uci commit luci 2>/dev/null || true
-
-          # Passwall 更新源（刷机后可直接 opkg 安装）
           mkdir -p /etc/opkg
           echo "src/gz passwall_luci https://master.dl.sourceforge.net/project/openwrt-passwall-build/releases/packages-24.10/aarch64_cortex-a53/passwall_luci" >> /etc/opkg/customfeeds.conf
           echo "src/gz passwall_packages https://master.dl.sourceforge.net/project/openwrt-passwall-build/releases/packages-24.10/aarch64_cortex-a53/passwall_packages" >> /etc/opkg/customfeeds.conf
-
           exit 0
           EOF
           chmod +x files/etc/uci-defaults/99-custom-init.sh
-          echo "first-boot script ready"
 
       - name: Build firmware
         run: |
           cd "$IB_DIR"
-          # 只使用 Image Builder 自带的包，保证稳定
           PACKAGES="luci luci-theme-argon openssh-sftp-server curl ip-full \
-            kmod-usb-net-qmi-wwan kmod-usb-serial-option luci-proto-qmi \
+            kmod-usb-net-qmi-wwan kmod-usb-serial-option \
             kmod-usb-net-cdc-ether kmod-usb-net-rndis \
             -dnsmasq"
-
           if [ -n "${{ inputs.extra_packages }}" ]; then
             PACKAGES="$PACKAGES ${{ inputs.extra_packages }}"
           fi
-
           echo "Building with PACKAGES: $PACKAGES"
-          make image \
-            PROFILE="cudy_tr3000-v1" \
-            PACKAGES="$PACKAGES" \
-            FILES="files" \
-            BIN_DIR="/tmp/fw"
+          make image PROFILE="cudy_tr3000-v1" PACKAGES="$PACKAGES" FILES="files" BIN_DIR="/tmp/fw"
 
       - name: Collect firmware
         run: |
@@ -133,7 +113,7 @@ jobs:
           cp -v /tmp/fw/*cudy* /tmp/fw/*tr3000* final/ 2>/dev/null || true
           ls -lah final/
           if [ -z "$(ls -A final 2>/dev/null)" ]; then
-            echo "ERROR: 没有生成固件文件"
+            echo "ERROR: 没有生成固件"
             ls -lah /tmp/fw/ || true
             exit 1
           fi
@@ -153,12 +133,11 @@ jobs:
           body: |
             使用定制 490MB UBI ImageBuilder 构建
             - 默认双频 Wi-Fi（Cudy / Cudy-5G）
-            - LAN IP: 192.168.1.1
-            - 彻底禁用 IPv6
-            - Argon 主题
-            - 空 root 密码
-            - 支持中兴 F50 和大疆/Volive 4G 模块
-            - 已预置 Passwall 源，刷机后执行：
+            - LAN: 192.168.1.1
+            - 禁用 IPv6
+            - Argon 主题 + 空密码
+            - 4G 模块驱动已包含
+            - 刷机后安装 Passwall：
               opkg update
               opkg install luci-app-passwall xray-core
           files: final/*
