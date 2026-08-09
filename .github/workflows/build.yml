@@ -1,4 +1,4 @@
-name: Build OpenWrt 25.12.5 Cudy TR3000 v1 SSR-Plus Xray 490MB-UBI
+name: Build ImmortalWrt 24.10.6 Cudy TR3000 v1 PassWall SSRPlus Xray 490MB-UBI
 
 on:
   workflow_dispatch:
@@ -26,292 +26,156 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential clang flex bison g++ gawk gcc-multilib g++-multilib gettext git libncurses5-dev libssl-dev python3-setuptools rsync swig unzip zlib1g-dev file wget curl qemu-utils libelf-dev
 
-      - name: Clone OpenWrt 25.12.5
+      - name: Clone ImmortalWrt 24.10.6
         run: |
-          git clone --depth=1 --branch v25.12.5 https://github.com/openwrt/openwrt.git openwrt
+          git clone --depth=1 --branch v24.10.6 https://github.com/immortalwrt/immortalwrt.git openwrt
 
-      - name: Force patch UBI 490MB + IMAGE_SIZE
+      - name: Patch UBI 490MB
         working-directory: openwrt
         run: |
           set -e
           DTS_FILE=$(find target/linux/mediatek/dts -name "mt7981b-cudy-tr3000-v1.dts" | head -1)
-          echo "DTS_FILE=$DTS_FILE"
-          test -n "$DTS_FILE" || { echo "ERROR: DTS not found"; exit 1; }
-          sed -i 's/reg = <0x5c0000 0x4000000>/reg = <0x5c0000 0x1EA00000>/g' "$DTS_FILE"
+          test -n "$DTS_FILE"
           sed -i 's/0x4000000/0x1EA00000/g' "$DTS_FILE"
-          grep -q "0x1EA00000" "$DTS_FILE" || { echo "ERROR: DTS patch failed"; exit 1; }
-          echo "SUCCESS: DTS UBI = 0x1EA00000"
 
           MK_FILE="target/linux/mediatek/image/filogic.mk"
-          awk '
-            /^define Device\/cudy_tr3000-v1$/ { in_dev=1 }
-            in_dev && /^endef$/ { in_dev=0 }
-            in_dev && /IMAGE_SIZE := 65536k/ { sub(/65536k/, "502784k") }
-            { print }
-          ' "$MK_FILE" > "$MK_FILE.tmp" && mv "$MK_FILE.tmp" "$MK_FILE"
-          grep -A15 "Device/cudy_tr3000-v1$" "$MK_FILE" | grep -q "502784k" || {
-            echo "ERROR: IMAGE_SIZE patch failed"; exit 1
-          }
-          echo "SUCCESS: IMAGE_SIZE = 502784k"
+          sed -i 's/IMAGE_SIZE := 65536k/IMAGE_SIZE := 502784k/' "$MK_FILE"
 
       - name: Setup feeds
         working-directory: openwrt
         run: |
           sed -i '/helloworld/d' feeds.conf.default
-          echo "src-git helloworld https://github.com/fw876/helloworld.git;master" >> feeds.conf.default
+          echo 'src-git helloworld https://github.com/fw876/helloworld.git;master' >> feeds.conf.default
+          echo 'src-git passwall_packages https://github.com/xiaorouji/openwrt-passwall-packages.git' >> feeds.conf.default
+          echo 'src-git passwall https://github.com/Openwrt-Passwall/openwrt-passwall.git' >> feeds.conf.default
           ./scripts/feeds update -a
           ./scripts/feeds install -a
-          test -d feeds/helloworld/luci-app-ssr-plus && echo "SSR Plus+ OK" || echo "WARNING: ssr-plus missing"
 
-      - name: Add argon theme
+      - name: Add Argon theme
         working-directory: openwrt
         run: |
           git clone --depth=1 https://github.com/jerrykuku/luci-theme-argon.git package/luci-theme-argon || true
 
-      - name: Write .config
+      - name: Write config
         working-directory: openwrt
         run: |
-          rm -f .config
-          cat >> .config << 'EOF'
+          cat > .config <<'CONFIG'
           CONFIG_TARGET_mediatek=y
           CONFIG_TARGET_mediatek_filogic=y
           CONFIG_TARGET_mediatek_filogic_DEVICE_cudy_tr3000-v1=y
-          CONFIG_PACKAGE_autocore=y
-          CONFIG_PACKAGE_base-files=y
-          CONFIG_PACKAGE_block-mount=y
-          CONFIG_PACKAGE_ca-bundle=y
-          CONFIG_PACKAGE_dnsmasq=n
+
+          CONFIG_PACKAGE_luci=y
+          CONFIG_PACKAGE_luci-theme-argon=y
+          CONFIG_PACKAGE_luci-app-argon-config=y
+
+          CONFIG_PACKAGE_kmod-mt76=y
+          CONFIG_PACKAGE_kmod-mt76-connac=y
+          CONFIG_PACKAGE_kmod-mt7981-firmware=y
+          CONFIG_PACKAGE_mt7981-wo-firmware=y
+
           CONFIG_PACKAGE_dnsmasq-full=y
           CONFIG_PACKAGE_dropbear=y
           CONFIG_PACKAGE_firewall4=y
-          CONFIG_PACKAGE_fstools=y
-          CONFIG_PACKAGE_kmod-crypto-hw-safexcel=y
-          CONFIG_PACKAGE_kmod-gpio-button-hotplug=y
-          CONFIG_PACKAGE_kmod-leds-gpio=y
-          CONFIG_PACKAGE_kmod-nf-nathelper=y
-          CONFIG_PACKAGE_kmod-nf-nathelper-extra=y
-          CONFIG_PACKAGE_kmod-nft-offload=y
-          CONFIG_PACKAGE_kmod-phy-aquantia=y
-          CONFIG_PACKAGE_libc=y
-          CONFIG_PACKAGE_libgcc=y
-          CONFIG_PACKAGE_libustream-openssl=y
-          CONFIG_PACKAGE_logd=y
-          CONFIG_PACKAGE_luci=y
-          CONFIG_PACKAGE_luci-compat=y
-          CONFIG_PACKAGE_luci-lib-base=y
-          CONFIG_PACKAGE_luci-light=y
-          CONFIG_PACKAGE_mtd=y
-          CONFIG_PACKAGE_netifd=y
           CONFIG_PACKAGE_nftables=y
-          CONFIG_PACKAGE_odhcp6c=y
-          CONFIG_PACKAGE_odhcpd-ipv6only=y
-          CONFIG_PACKAGE_ppp=y
-          CONFIG_PACKAGE_ppp-mod-pppoe=y
-          CONFIG_PACKAGE_procd-ujail=y
-          CONFIG_PACKAGE_uboot-envtools=y
-          CONFIG_PACKAGE_uci=y
-          CONFIG_PACKAGE_uclient-fetch=y
-          CONFIG_PACKAGE_urandom-seed=y
-          CONFIG_PACKAGE_urngd=y
-          CONFIG_PACKAGE_wpad-openssl=y
+          CONFIG_PACKAGE_ip-full=y
+
+          CONFIG_PACKAGE_curl=y
+          CONFIG_PACKAGE_ca-bundle=y
+          CONFIG_PACKAGE_openssh-sftp-server=y
+          CONFIG_PACKAGE_luci-app-ttyd=y
+          CONFIG_PACKAGE_ttyd=y
+
+          CONFIG_PACKAGE_luci-app-passwall=y
+          CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Xray=y
+          CONFIG_PACKAGE_luci-app-ssr-plus=y
+          CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Xray=y
+          CONFIG_PACKAGE_xray-core=y
+          CONFIG_PACKAGE_v2ray-geoip=y
+          CONFIG_PACKAGE_v2ray-geosite=y
+
           CONFIG_PACKAGE_kmod-usb3=y
-          CONFIG_PACKAGE_kmod-mt7915e=y
-          CONFIG_PACKAGE_kmod-mt7981-firmware=y
-          CONFIG_PACKAGE_mt7981-wo-firmware=y
-          CONFIG_PACKAGE_automount=y
-          CONFIG_PACKAGE_luci-theme-argon=y
-          CONFIG_PACKAGE_luci-app-upnp=y
-          CONFIG_PACKAGE_miniupnpd-nftables=y
-          CONFIG_PACKAGE_kmod-nft-nat=y
-          CONFIG_PACKAGE_kmod-nf-nat=y
-          CONFIG_PACKAGE_kmod-nft-core=y
-          CONFIG_PACKAGE_kmod-nft-fib=y
-          CONFIG_PACKAGE_kmod-mii=y
           CONFIG_PACKAGE_kmod-usb-net=y
           CONFIG_PACKAGE_kmod-usb-net-cdc-ether=y
           CONFIG_PACKAGE_kmod-usb-net-rndis=y
-          CONFIG_PACKAGE_kmod-usb-storage=y
-          CONFIG_PACKAGE_kmod-usb-storage-uas=y
-          CONFIG_PACKAGE_kmod-scsi-core=y
-          CONFIG_PACKAGE_kmod-fs-ext4=y
-          CONFIG_PACKAGE_kmod-fs-exfat=y
-          CONFIG_PACKAGE_kmod-fs-vfat=y
-          CONFIG_PACKAGE_kmod-nls-utf8=y
-          CONFIG_PACKAGE_kmod-nls-cp437=y
-          CONFIG_PACKAGE_kmod-nls-iso8859-1=y
-          CONFIG_PACKAGE_e2fsprogs=y
-          CONFIG_PACKAGE_kmod-nf-socket=y
-          CONFIG_PACKAGE_kmod-nft-socket=y
-          CONFIG_PACKAGE_kmod-nft-tproxy=y
-          CONFIG_PACKAGE_kmod-nf-tproxy=y
-          CONFIG_PACKAGE_kmod-tun=y
-          CONFIG_PACKAGE_kmod-inet-diag=y
-          CONFIG_PACKAGE_kmod-dummy=y
-          CONFIG_PACKAGE_kmod-nf-conntrack-netlink=y
-          CONFIG_PACKAGE_luci-app-ssr-plus=y
-          CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Xray=y
-          CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_NONE_V2RAY=y
-          CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_ChinaDNS_NG=y
-          CONFIG_PACKAGE_xray-core=y
-          CONFIG_PACKAGE_chinadns-ng=y
-          CONFIG_PACKAGE_v2ray-geoip=y
-          CONFIG_PACKAGE_v2ray-geosite=y
-          CONFIG_PACKAGE_ip-full=y
-          CONFIG_PACKAGE_curl=y
-          CONFIG_PACKAGE_openssh-sftp-server=y
-          CONFIG_PACKAGE_kmod-usb-serial=y
-          CONFIG_PACKAGE_kmod-usb-serial-option=y
-          CONFIG_PACKAGE_kmod-usb-serial-wwan=y
           CONFIG_PACKAGE_kmod-usb-net-qmi-wwan=y
           CONFIG_PACKAGE_kmod-usb-net-cdc-mbim=y
           CONFIG_PACKAGE_kmod-usb-net-cdc-ncm=y
           CONFIG_PACKAGE_kmod-usb-wdm=y
+          CONFIG_PACKAGE_kmod-usb-serial=y
+          CONFIG_PACKAGE_kmod-usb-serial-option=y
+          CONFIG_PACKAGE_kmod-usb-serial-wwan=y
+          CONFIG_PACKAGE_usb-modeswitch=y
+          CONFIG_PACKAGE_uqmi=y
+          CONFIG_PACKAGE_umbim=y
+
           CONFIG_PACKAGE_luci-proto-qmi=y
           CONFIG_PACKAGE_luci-proto-mbim=y
-          EOF
-          sed -i 's/^[[:space:]]*//' .config
 
-          # 关闭会触发 hash mismatch / 不需要的组件
-          cat >> .config << 'EOF'
-          # CONFIG_PACKAGE_simple-obfs is not set
-          # CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Shadowsocks_Simple_Obfs is not set
-          # CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_V2ray is not set
-          # CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Kcptun is not set
-          # CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Hysteria is not set
-          # CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_NaiveProxy is not set
-          # CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Trojan is not set
-          # CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Shadowsocks_Libev_Client is not set
-          # CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Shadowsocks_Libev_Server is not set
-          # CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_ShadowsocksR_Libev_Client is not set
-          # CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Shadowsocks_Rust_Client is not set
-          # CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Shadowsocks_Rust_Server is not set
-          # CONFIG_PACKAGE_shadowsocks-libev-ss-local is not set
-          # CONFIG_PACKAGE_shadowsocks-libev-ss-redir is not set
-          # CONFIG_PACKAGE_shadowsocks-rust-sslocal is not set
-          # CONFIG_PACKAGE_shadowsocksr-libev-ssr-local is not set
-          # CONFIG_PACKAGE_shadowsocksr-libev-ssr-redir is not set
-          # CONFIG_PACKAGE_kcptun-client is not set
-          # CONFIG_PACKAGE_hysteria is not set
-          # CONFIG_PACKAGE_naiveproxy is not set
-          # CONFIG_PACKAGE_trojan is not set
-          # CONFIG_PACKAGE_v2ray-core is not set
-          # CONFIG_PACKAGE_v2ray-plugin is not set
-          # CONFIG_PACKAGE_xray-plugin is not set
-          # CONFIG_PACKAGE_mosdns is not set
-          EOF
-          sed -i 's/^[[:space:]]*//' .config
+          # CONFIG_PACKAGE_odhcp6c is not set
+          # CONFIG_PACKAGE_odhcpd-ipv6only is not set
+          # CONFIG_PACKAGE_kmod-ipv6 is not set
+          CONFIG_IPV6=n
+          CONFIG_PACKAGE_docker=n
+          CONFIG_PACKAGE_mihomo=n
+          CONFIG_PACKAGE_openclash=n
+          CONFIG_PACKAGE_luci-app-xray=n
+          CONFIG_PACKAGE_sing-box=n
+          CONFIG_PACKAGE_hysteria=n
+          CONFIG_PACKAGE_naiveproxy=n
+          CONFIG_PACKAGE_trojan=n
+          CONFIG_PACKAGE_v2ray-core=n
+          CONFIG_PACKAGE_simple-obfs=n
+          CONFIG_PACKAGE_shadowsocks-libev=n
+          CONFIG_PACKAGE_shadowsocksr-libev=n
+          CONFIG_PACKAGE_kcptun=n
+          CONFIG_PACKAGE_mosdns=n
+          CONFIG_PACKAGE_kmod-mt7915e=n
+          CONFIG_PACKAGE_luci-app-upnp=n
+          CONFIG_PACKAGE_miniupnpd=n
+          CONFIG_PACKAGE_odhcp6c=n
+          CONFIG_PACKAGE_odhcpd-ipv6only=n
+          CONFIG_PARTITION_SIZE=490
+          CONFIG_TARGET_ROOTFS_PARTSIZE=490
+          CONFIG
+
+          sed -i 's/^          //' .config
           make defconfig
 
-          # defconfig 后再次强制关闭（防止被默认选上）
-          sed -i 's/CONFIG_PACKAGE_simple-obfs=y/# CONFIG_PACKAGE_simple-obfs is not set/' .config || true
-          sed -i 's/CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Shadowsocks_Simple_Obfs=y/# CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Shadowsocks_Simple_Obfs is not set/' .config || true
-          grep -E "simple-obfs|INCLUDE_Xray|ssr-plus=y" .config || true
-
-      - name: Write first-boot script
+      - name: First boot settings
         working-directory: openwrt
         run: |
           mkdir -p files/etc/uci-defaults
-          cat > files/etc/uci-defaults/99-custom-init.sh << 'SCRIPT'
+          cat > files/etc/uci-defaults/99-cudy-init.sh <<'SCRIPT'
           #!/bin/sh
-          passwd -d root
+          echo "root:Cudy123456" | chpasswd
           uci set network.lan.ipaddr='192.168.1.1'
-          uci set network.lan.netmask='255.255.255.0'
+          uci delete network.wan6
           uci commit network
-          uci set network.lan.ipv6='0'
-          uci set network.wan.ipv6='0'
-          uci -q delete network.wan6 || true
           uci set dhcp.lan.dhcpv6='disabled'
           uci set dhcp.lan.ra='disabled'
-          uci set dhcp.lan.ndp='disabled'
-          uci set dhcp.lan.ra_slaac='0'
-          uci commit network
           uci commit dhcp
           mkdir -p /etc/sysctl.d
-          echo "net.ipv6.conf.all.disable_ipv6 = 1" > /etc/sysctl.d/99-disable-ipv6.conf
-          echo "net.ipv6.conf.default.disable_ipv6 = 1" >> /etc/sysctl.d/99-disable-ipv6.conf
-          sysctl -p /etc/sysctl.d/99-disable-ipv6.conf 2>/dev/null || true
-          uci set wireless.@wifi-device[0].disabled='0' 2>/dev/null || true
-          uci set wireless.@wifi-iface[0].disabled='0' 2>/dev/null || true
-          uci set wireless.@wifi-iface[0].ssid='Cudy' 2>/dev/null || true
-          uci set wireless.@wifi-iface[0].encryption='none' 2>/dev/null || true
-          uci set wireless.@wifi-device[1].disabled='0' 2>/dev/null || true
-          uci set wireless.@wifi-iface[1].disabled='0' 2>/dev/null || true
-          uci set wireless.@wifi-iface[1].ssid='Cudy-5G' 2>/dev/null || true
-          uci set wireless.@wifi-iface[1].encryption='none' 2>/dev/null || true
-          uci commit wireless 2>/dev/null || true
-          wifi up 2>/dev/null || true
-          uci set luci.main.mediaurlbase='/luci-static/argon' 2>/dev/null || true
-          uci commit luci 2>/dev/null || true
+          echo 'net.ipv6.conf.all.disable_ipv6=1' >/etc/sysctl.d/99-disable-ipv6.conf
+          uci set wireless.@wifi-iface[0].ssid='Cudy'
+          uci set wireless.@wifi-iface[0].encryption='psk2'
+          uci set wireless.@wifi-iface[0].key='Cudy123456'
+          uci set wireless.@wifi-iface[1].ssid='Cudy-5G'
+          uci set wireless.@wifi-iface[1].encryption='psk2'
+          uci set wireless.@wifi-iface[1].key='Cudy123456'
+          uci commit wireless
+          wifi up
           exit 0
           SCRIPT
-          sed -i 's/^[[:space:]]*//' files/etc/uci-defaults/99-custom-init.sh
-          chmod +x files/etc/uci-defaults/99-custom-init.sh
+          sed -i 's/^          //' files/etc/uci-defaults/99-cudy-init.sh
+          chmod +x files/etc/uci-defaults/99-cudy-init.sh
 
-      - name: Download packages
+      - name: Build
         working-directory: openwrt
         run: |
-          set +e
-          for i in 1 2 3; do
-            echo "=== Download attempt $i/3 ==="
-            make download -j$(nproc) V=s 2>&1 | tee /tmp/dl-$i.log
-            fails=$(grep -cE "returned error: 404|Download failed|Hash mismatch" /tmp/dl-$i.log || true)
-            echo "Failed count: $fails"
-            [ "$fails" = "0" ] && exit 0
-            sleep 20
-          done
-          grep -E "returned error: 404|Download failed|Hash mismatch" /tmp/dl-*.log | sort -u | head -30 || true
-          exit 0
+          make -j$(nproc) V=s
 
-      - name: Build firmware
-        working-directory: openwrt
-        run: |
-          set -o pipefail
-          make -j$(nproc) V=s 2>&1 | tee build.log
-
-      - name: Check and collect firmware
-        working-directory: openwrt
-        run: |
-          set -e
-          ls -lah bin/targets/mediatek/filogic/ || true
-          find bin/targets/mediatek/filogic -type f \( -name "*cudy*" -o -name "*tr3000*" \) -ls || true
-          count=$(find bin/targets/mediatek/filogic -type f \( -name "*sysupgrade*" -o -name "*cudy*tr3000*" \) 2>/dev/null | wc -l)
-          echo "Firmware file count: $count"
-          if [ "$count" -eq 0 ]; then
-            echo "ERROR: No firmware produced!"
-            tail -100 build.log || true
-            exit 1
-          fi
-          mkdir -p /tmp/fw
-          cp -v bin/targets/mediatek/filogic/*cudy* /tmp/fw/ 2>/dev/null || true
-          cp -v bin/targets/mediatek/filogic/*tr3000* /tmp/fw/ 2>/dev/null || true
-          ls -lah /tmp/fw/
-
-      - name: Upload artifact
+      - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: openwrt-25.12.5-cudy-tr3000-ssrplus-xray-490MB
-          path: /tmp/fw/
-          if-no-files-found: error
-          retention-days: 14
-
-      - name: Create Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v25.12.5-ssrplus-xray-490MB-${{ github.run_number }}
-          name: OpenWrt 25.12.5 Cudy TR3000 - SSR Plus+ Xray 490MB UBI
-          body: |
-            OpenWrt 25.12.5 + SSR Plus+ (Xray only) + 强制 490MB UBI
-            - 已关闭 simple-obfs 等非 Xray 组件（避免 hash mismatch）
-            - DTS UBI 0x1EA00000 / IMAGE_SIZE 502784k
-            - fw876/helloworld feed
-          files: /tmp/fw/*
-          draft: false
-          prerelease: false
-
-      - name: Upload log on failure
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-log-error
-          path: openwrt/build.log
-          retention-days: 7
+          name: immortalwrt-24.10.6-cudy-tr3000-passwall-ssrplus-xray
+          path: openwrt/bin/targets/mediatek/filogic/*
