@@ -1,12 +1,7 @@
 name: Build ImmortalWrt for Cudy TR3000 512MB
 
 on:
-  workflow_dispatch:
-  push:
-    branches: [ main ]
-    paths-ignore:
-      - '**.md'
-      - 'README.md'
+  workflow_dispatch:          # 仅手动触发，不会自动编译
 
 env:
   REPO_URL: https://github.com/immortalwrt/immortalwrt
@@ -66,11 +61,9 @@ jobs:
         run: |
           mkdir -p firmware
           cd openwrt/bin/targets/mediatek/filogic
-          # 复制常用固件文件
           cp -f *sysupgrade*.bin ../../../firmware/ 2>/dev/null || true
           cp -f *sysupgrade*.itb ../../../firmware/ 2>/dev/null || true
           cp -f *.manifest ../../../firmware/ 2>/dev/null || true
-          # 生成说明文件
           echo "ImmortalWrt 24.10 for Cudy TR3000 v1 (512MB Hardmod)" > ../../../firmware/release-info.txt
           echo "Build time: $(date)" >> ../../../firmware/release-info.txt
           echo "UBI size: ~490MB" >> ../../../firmware/release-info.txt
