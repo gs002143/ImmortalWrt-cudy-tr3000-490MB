@@ -1,183 +1,79 @@
-# ImmortalWrt 24.10.6 Cudy TR3000 v2
-# 修复项目：
-# 1. Release 固件上传
-# 2. mt76 无线驱动
-# 3. UPnP/NAT-PMP
-# 4. PassWall + SSR Plus Xray
-# 5. IPv6关闭
-
-name: Build ImmortalWrt 24.10.6 Cudy TR3000 v2
+name: Build ImmortalWrt for Cudy TR3000 512MB
 
 on:
   workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths-ignore:
+      - '**.md'
 
-permissions:
-  contents: write
+env:
+  REPO_URL: https://github.com/immortalwrt/immortalwrt
+  REPO_BRANCH: openwrt-24.10
+  DEVICE_TARGET: mediatek
+  DEVICE_SUBTARGET: filogic
+  DEVICE_PROFILE: cudy_tr3000-v1-ubootmod
+  UPLOAD_FIRMWARE: true
+  UPLOAD_RELEASE: true
 
 jobs:
   build:
     runs-on: ubuntu-22.04
-    timeout-minutes: 360
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Clone ImmortalWrt
+      - name: Initialization environment
+        env:
+          DEBIAN_FRONTEND: noninteractive
         run: |
-          git clone --depth=1 --branch v24.10.6 https://github.com/immortalwrt/immortalwrt.git openwrt
+          sudo -E apt-get update
+          sudo -E apt-get install -y build-essential clang flex bison g++ gawk gcc-multilib g++-multilib gettext git libncurses5-dev libssl-dev python3-distutils rsync unzip zlib1g-dev file wget curl ccache
+          sudo timedatectl set-timezone Asia/Shanghai
 
-      - name: Force patch UBI 490MB (512MB Flash 硬改板) + IMAGE_SIZE
-        working-directory: openwrt
+      - name: Clone source code
         run: |
-          set -e
-          DTS_FILE=$(find target/linux/mediatek/dts -name "mt7981b-cudy-tr3000-v1.dts" | head -1)
-          echo "DTS_FILE=$DTS_FILE"
-          test -n "$DTS_FILE" || { echo "ERROR: DTS not found"; exit 1; }
-          sed -i 's/reg = <0x5c0000 0x4000000>/reg = <0x5c0000 0x1EA00000>/g' "$DTS_FILE"
-          sed -i 's/0x4000000/0x1EA00000/g' "$DTS_FILE"
-          grep -q "0x1EA00000" "$DTS_FILE" || { echo "ERROR: DTS patch failed"; exit 1; }
-          echo "SUCCESS: DTS UBI = 0x1EA00000 (~490MiB)"
+          git clone $REPO_URL -b $REPO_BRANCH --single-branch --depth 1 openwrt
+          # 锁定接近 24.10.6 的提交（可根据需要调整）
+          # cd openwrt && git checkout <具体commit> && cd ..
 
-          MK_FILE="target/linux/mediatek/image/filogic.mk"
-          awk '
-            /^define Device\/cudy_tr3000-v1$/ { in_dev=1 }
-            in_dev && /^endef$/ { in_dev=0 }
-            in_dev && /IMAGE_SIZE := 65536k/ { sub(/65536k/, "502784k") }
-            { print }
-          ' "$MK_FILE" > "$MK_FILE.tmp" && mv "$MK_FILE.tmp" "$MK_FILE"
-          grep -A15 "Device/cudy_tr3000-v1$" "$MK_FILE" | grep -q "502784k" || {
-            echo "ERROR: IMAGE_SIZE patch failed"; exit 1
-          }
-          echo "SUCCESS: IMAGE_SIZE = 502784k"
-
-      - name: Setup feeds
-        working-directory: openwrt
+      - name: Load custom feeds & diy scripts
         run: |
-          echo 'src-git helloworld https://github.com/fw876/helloworld.git;master' >> feeds.conf.default
-          echo 'src-git passwall_packages https://github.com/xiaorouji/openwrt-passwall-packages.git' >> feeds.conf.default
-          echo 'src-git passwall https://github.com/Openwrt-Passwall/openwrt-passwall.git' >> feeds.conf.default
+          cd openwrt
+          chmod +x ../diy-part1.sh ../diy-part2.sh
+          ../diy-part1.sh
           ./scripts/feeds update -a
           ./scripts/feeds install -a
+          ../diy-part2.sh
 
-      - name: Build config
-        working-directory: openwrt
+      - name: Download package
         run: |
-          cat > .config <<'EOF'
-          CONFIG_TARGET_mediatek=y
-          CONFIG_TARGET_mediatek_filogic=y
-          CONFIG_TARGET_mediatek_filogic_DEVICE_cudy_tr3000-v1=y
+          cd openwrt
+          make download -j8
+          find dl -size -1024c -exec ls -l {} \;
+          find dl -size -1024c -exec rm -f {} \;
 
-          CONFIG_PACKAGE_kmod-mt76=y
-          CONFIG_PACKAGE_kmod-mt76-connac=y
-          CONFIG_PACKAGE_kmod-mt7915e=y
-          CONFIG_PACKAGE_kmod-mt7981-firmware=y
-          CONFIG_PACKAGE_mt7981-wo-firmware=y
-          CONFIG_PACKAGE_wifi-scripts=y
-
-          CONFIG_PACKAGE_luci=y
-          CONFIG_PACKAGE_luci-theme-argon=y
-          CONFIG_PACKAGE_luci-app-argon-config=y
-
-          CONFIG_PACKAGE_luci-app-passwall=y
-          CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Xray=y
-          CONFIG_PACKAGE_luci-app-ssr-plus=y
-          CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Xray=y
-          CONFIG_PACKAGE_xray-core=y
-          CONFIG_PACKAGE_v2ray-geoip=y
-          CONFIG_PACKAGE_v2ray-geosite=y
-
-          CONFIG_PACKAGE_luci-app-upnp=y
-          CONFIG_PACKAGE_miniupnpd=y
-          CONFIG_PACKAGE_miniupnpd-nftables=y
-
-          CONFIG_PACKAGE_curl=y
-          CONFIG_PACKAGE_openssh-sftp-server=y
-
-          CONFIG_PACKAGE_kmod-usb-net-qmi-wwan=y
-          CONFIG_PACKAGE_kmod-usb-net-cdc-mbim=y
-          CONFIG_PACKAGE_kmod-usb-net-cdc-ncm=y
-          CONFIG_PACKAGE_kmod-usb-net-cdc-ether=y
-          CONFIG_PACKAGE_kmod-usb-net-rndis=y
-          CONFIG_PACKAGE_kmod-usb-serial=y
-          CONFIG_PACKAGE_kmod-usb-serial-option=y
-          CONFIG_PACKAGE_usb-modeswitch=y
-          CONFIG_PACKAGE_uqmi=y
-          CONFIG_PACKAGE_umbim=y
-
-          # CONFIG_PACKAGE_odhcp6c is not set
-          # CONFIG_PACKAGE_odhcpd-ipv6only is not set
-          # CONFIG_PACKAGE_kmod-ipv6 is not set
-          EOF
+      - name: Compile firmware
+        id: compile
+        run: |
+          cd openwrt
           make defconfig
+          make -j$(nproc) || make -j1 V=s
+          echo "status=success" >> $GITHUB_OUTPUT
+          echo "FILE_DATE=$(date +'%Y%m%d%H%M')" >> $GITHUB_ENV
 
-      - name: Write first-boot script (彻底关闭IPv6 / 默认双频WiFi / 192.168.1.1 / argon主题)
-        working-directory: openwrt
-        run: |
-          mkdir -p files/etc/uci-defaults
-          cat > files/etc/uci-defaults/99-custom-init.sh << 'SCRIPT'
-          #!/bin/sh
-          # ---- 基础网络 ----
-          uci set network.lan.ipaddr='192.168.1.1'
-          uci set network.lan.netmask='255.255.255.0'
-
-          # ---- 彻底关闭 IPv6 (不只是不装包，系统层面全关) ----
-          uci set network.lan.ipv6='0'
-          uci set network.wan.ipv6='0'
-          uci -q delete network.wan6 || true
-          uci set dhcp.lan.dhcpv6='disabled'
-          uci set dhcp.lan.ra='disabled'
-          uci set dhcp.lan.ndp='disabled'
-          uci set dhcp.lan.ra_slaac='0'
-          uci commit network
-          uci commit dhcp
-          mkdir -p /etc/sysctl.d
-          echo "net.ipv6.conf.all.disable_ipv6 = 1" > /etc/sysctl.d/99-disable-ipv6.conf
-          echo "net.ipv6.conf.default.disable_ipv6 = 1" >> /etc/sysctl.d/99-disable-ipv6.conf
-          sysctl -p /etc/sysctl.d/99-disable-ipv6.conf 2>/dev/null || true
-
-          # ---- 默认开启双频 WiFi ----
-          uci set wireless.@wifi-device[0].disabled='0' 2>/dev/null || true
-          uci set wireless.@wifi-iface[0].disabled='0' 2>/dev/null || true
-          uci set wireless.@wifi-iface[0].ssid='Cudy' 2>/dev/null || true
-          uci set wireless.@wifi-iface[0].encryption='none' 2>/dev/null || true
-          uci set wireless.@wifi-device[1].disabled='0' 2>/dev/null || true
-          uci set wireless.@wifi-iface[1].disabled='0' 2>/dev/null || true
-          uci set wireless.@wifi-iface[1].ssid='Cudy-5G' 2>/dev/null || true
-          uci set wireless.@wifi-iface[1].encryption='none' 2>/dev/null || true
-          uci commit wireless 2>/dev/null || true
-          wifi up 2>/dev/null || true
-
-          # ---- Argon 主题 ----
-          uci set luci.main.mediaurlbase='/luci-static/argon' 2>/dev/null || true
-          uci commit luci 2>/dev/null || true
-
-          exit 0
-          SCRIPT
-          sed -i 's/^[[:space:]]*//' files/etc/uci-defaults/99-custom-init.sh
-          chmod +x files/etc/uci-defaults/99-custom-init.sh
-
-      - name: Build firmware
-        working-directory: openwrt
-        run: |
-          make -j$(nproc) V=s
-
-      - name: Collect
-        working-directory: openwrt
-        run: |
-          mkdir -p /tmp/release
-          cp bin/targets/mediatek/filogic/*.bin /tmp/release/
-          ls -lah /tmp/release
-
-      - name: Upload
+      - name: Upload firmware to Artifacts
         uses: actions/upload-artifact@v4
+        if: steps.compile.outputs.status == 'success'
         with:
-          name: immortalwrt-tr3000-v2
-          path: /tmp/release/*
+          name: ImmortalWrt_Cudy_TR3000_512MB_${{ env.FILE_DATE }}
+          path: openwrt/bin/targets/mediatek/filogic/*.bin
+          retention-days: 30
 
-      - name: Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: tr3000-v2-${{ github.run_number }}
-          name: ImmortalWrt TR3000 v2
-          files: /tmp/release/*
+      - name: Generate release
+        if: env.UPLOAD_RELEASE == 'true' && steps.compile.outputs.status == 'success'
+        run: |
+          cd openwrt/bin/targets/mediatek/filogic
+          echo "ImmortalWrt 24.10 for Cudy TR3000 v1 (512MB hardmod)" > release.txt
+          echo "Build date: $(date)" >> release.txt
+          echo "UBI: ~490MB" >> release.txt
