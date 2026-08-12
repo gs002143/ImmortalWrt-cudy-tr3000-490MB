@@ -158,6 +158,15 @@ jobs:
           # 无登录密码
           passwd -d root
 
+          # 关闭 IPv6（提升透明代理稳定性）
+          uci set network.wan.ipv6='0'
+          uci set network.lan.ipv6='0'
+          uci set dhcp.lan.dhcpv6='disabled'
+          uci set dhcp.lan.ra='disabled'
+          uci set dhcp.lan.ndp='disabled'
+          uci commit network
+          uci commit dhcp
+
           # 开启 WiFi 并设置 SSID
           uci set wireless.radio0.disabled='0'
           uci set wireless.default_radio0.ssid='Cudy'
@@ -216,10 +225,14 @@ jobs:
         run: |
           mkdir -p firmware
           cd openwrt/bin/targets/mediatek/filogic
-          cp -f *sysupgrade*.bin ../../../firmware/ 2>/dev/null || true
-          cp -f *sysupgrade*.itb ../../../firmware/ 2>/dev/null || true
-          cp -f *.manifest ../../../firmware/ 2>/dev/null || true
-          ls -lh ../../../firmware/
+
+          # 使用绝对路径，避免相对路径错误
+          cp -f *sysupgrade*.bin $GITHUB_WORKSPACE/firmware/ 2>/dev/null || true
+          cp -f *sysupgrade*.itb $GITHUB_WORKSPACE/firmware/ 2>/dev/null || true
+          cp -f *.manifest $GITHUB_WORKSPACE/firmware/ 2>/dev/null || true
+
+          echo "=== Firmware files ==="
+          ls -lh $GITHUB_WORKSPACE/firmware/
 
       - name: Upload firmware to Artifacts
         uses: actions/upload-artifact@v4
@@ -242,6 +255,7 @@ jobs:
             - SSR Plus+（仅 Xray）+ Nftables 透明代理
             - UPnP
             - 中兴 F50 支持（识别为 eth2）
+            - 默认关闭 IPv6（提升透明代理稳定性）
             - 首次启动无密码，WiFi：Cudy / Cudy-5G
             - 插网线走有线，插 F50 走 eth2
           files: firmware/*
