@@ -38,9 +38,17 @@ jobs:
           # ========== diy-part1.sh ==========
           cat > diy-part1.sh << 'EOF'
           #!/bin/bash
+          # helloworld (SSR Plus+)
           sed -i "/helloworld/d" "feeds.conf.default"
           echo "src-git helloworld https://github.com/fw876/helloworld.git" >> "feeds.conf.default"
 
+          # luci-app-xray (yichya)
+          echo "src-git-full luci_app_xray https://github.com/yichya/luci-app-xray" >> "feeds.conf.default"
+
+          # openwrt-xray (yichya Xray 核心)
+          git clone --depth=1 https://github.com/yichya/openwrt-xray.git package/openwrt-xray
+
+          # Argon 主题
           git clone --depth=1 https://github.com/jerrykuku/luci-theme-argon.git package/luci-theme-argon
           git clone --depth=1 https://github.com/jerrykuku/luci-app-argon-config.git package/luci-app-argon-config
           EOF
@@ -51,7 +59,6 @@ jobs:
           #!/bin/bash
 
           # 扩大 UBI 到 0x1da40000（与当前设备一致，约 490MB）
-          # 普通 tr3000-v1 的 DTS
           sed -i 's/reg = <0x5c0000 0x[0-9a-fA-F]*>;/reg = <0x5c0000 0x1da40000>;/' \
             target/linux/mediatek/dts/mt7981b-cudy-tr3000-v1.dts
 
@@ -128,6 +135,10 @@ jobs:
           CONFIG_PACKAGE_dns2tcp=y
           CONFIG_PACKAGE_microsocks=y
           CONFIG_PACKAGE_chinadns-ng=y
+
+          # yichya 的 Xray 相关
+          CONFIG_PACKAGE_luci-app-xray=y
+          CONFIG_PACKAGE_openwrt-xray=y
 
           # 中兴 F50
           CONFIG_PACKAGE_kmod-mii=y
@@ -247,6 +258,7 @@ jobs:
             - UBI：0x1da40000（约 490MB）
             - Argon 主题
             - SSR Plus+（仅 Xray）+ Nftables
+            - luci-app-xray + openwrt-xray（yichya）
             - 中兴 F50（eth2）
             - 默认关闭 IPv6
             - 无密码，WiFi：Cudy / Cudy-5G
